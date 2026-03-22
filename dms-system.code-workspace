@@ -1,9 +1,6 @@
-{
-	"folders": [
-		{
-			"uri": "vscode-remote://codespaces+fuzzy-broccoli-wrwxrrrqxgqvfg76v/workspaces/dms-system"
-		}
-	],
-	"remoteAuthority": "codespaces+fuzzy-broccoli-wrwxrrrqxgqvfg76v",
-	"settings": {}
-}
+# In your extracted project folder
+git init
+git remote add origin https://github.com/SiderealMotors/dms-system.git
+git add .
+git commit -m "Initial commit"
+git push -f origin main
