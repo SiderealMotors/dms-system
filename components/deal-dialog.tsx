@@ -163,14 +163,14 @@ export function DealDialog({ open, onClose, deal }: DealDialogProps) {
               <div className="space-y-2">
                 <Label htmlFor="lead_id">Lead/Customer</Label>
                 <Select
-                  value={form.lead_id}
-                  onValueChange={(value) => setForm({ ...form, lead_id: value })}
+                  value={form.lead_id || "none"}
+                  onValueChange={(value) => setForm({ ...form, lead_id: value === "none" ? "" : value })}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select a lead" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">None</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
                     {leads.map((lead) => (
                       <SelectItem key={lead.id} value={lead.id}>
                         {lead.customer?.first_name} {lead.customer?.last_name}
@@ -183,16 +183,16 @@ export function DealDialog({ open, onClose, deal }: DealDialogProps) {
               <div className="space-y-2">
                 <Label htmlFor="salesperson_id">Salesperson</Label>
                 <Select
-                  value={form.salesperson_id}
+                  value={form.salesperson_id || "none"}
                   onValueChange={(value) =>
-                    setForm({ ...form, salesperson_id: value })
+                    setForm({ ...form, salesperson_id: value === "none" ? "" : value })
                   }
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select salesperson" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">None</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
                     {salesUsers.map((user) => (
                       <SelectItem key={user.id} value={user.id}>
                         {user.name}

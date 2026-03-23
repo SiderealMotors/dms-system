@@ -306,16 +306,16 @@ export function LeadDialog({ open, onClose, lead }: LeadDialogProps) {
               <div className="space-y-2">
                 <Label htmlFor="assigned_to">Assigned To</Label>
                 <Select
-                  value={leadForm.assigned_to}
+                  value={leadForm.assigned_to || "unassigned"}
                   onValueChange={(value) =>
-                    setLeadForm({ ...leadForm, assigned_to: value })
+                    setLeadForm({ ...leadForm, assigned_to: value === "unassigned" ? "" : value })
                   }
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select salesperson" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Unassigned</SelectItem>
+                    <SelectItem value="unassigned">Unassigned</SelectItem>
                     {salesUsers.map((user) => (
                       <SelectItem key={user.id} value={user.id}>
                         {user.name}

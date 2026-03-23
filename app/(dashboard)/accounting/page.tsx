@@ -13,7 +13,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Plus } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
 import type { GLAccount, JournalEntry, JournalStatus } from "@/lib/types"
 

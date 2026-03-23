@@ -3,17 +3,9 @@
 import { useState } from "react"
 import useSWR from "swr"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Search, Phone, Mail, User } from "lucide-react"
+import { Plus, Phone, Mail, User } from "lucide-react"
 import { formatDate } from "@/lib/utils"
 import type { Lead, LeadStatus } from "@/lib/types"
 import { LeadDialog } from "@/components/lead-dialog"
