@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import useSWR from "swr"
 import {
   Dialog,
@@ -19,13 +19,16 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Search, Car, DollarSign, TrendingUp } from "lucide-react"
-import { formatCurrency, calculateVehicleTotalCost, calculateLotDays, calculateNetProfit } from "@/lib/utils"
+import { Loader2, Search, Car, DollarSign, TrendingUp, Calculator } from "lucide-react"
+import { formatCurrency, calculateLotDays } from "@/lib/utils"
 import type { Vehicle, VehicleStatus, User } from "@/lib/types"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
+
+// Ontario HST Tax Rate
+const TAX_RATE = 0.13
 
 interface VehicleDialogProps {
   open: boolean
@@ -46,22 +49,25 @@ const initialFormState = {
   status: "AVAILABLE" as VehicleStatus,
   date_acquired: new Date().toISOString().split("T")[0],
   date_sold: "",
+  // Purchase fields
   purchase_price: 0,
   asking_price: 0,
-  selling_price: 0,
+  // Cost fields (pre-tax)
   safety_estimate: 0,
   safety_cost: 0,
-  safety_charge: 0,
   warranty_cost: 0,
-  warranty_charge: 0,
   floorplan_interest_cost: 0,
   gas: 0,
+  // Sale fields
+  selling_price: 0,
+  safety_charge: 0,
+  warranty_charge: 0,
   omvic_fee: 0,
-  referral_amount: 0,
   buyer_name: "",
+  salesperson_id: "",
+  referral_amount: 0,
   payment_method: "",
   deposit_amount: 0,
-  salesperson_id: "",
   notes: "",
 }
 
@@ -92,20 +98,20 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
         date_sold: vehicle.date_sold?.split("T")[0] || "",
         purchase_price: vehicle.purchase_price || 0,
         asking_price: vehicle.asking_price || 0,
-        selling_price: vehicle.selling_price || 0,
         safety_estimate: vehicle.safety_estimate || 0,
         safety_cost: vehicle.safety_cost || 0,
-        safety_charge: vehicle.safety_charge || 0,
         warranty_cost: vehicle.warranty_cost || 0,
-        warranty_charge: vehicle.warranty_charge || 0,
         floorplan_interest_cost: vehicle.floorplan_interest_cost || 0,
         gas: vehicle.gas || 0,
+        selling_price: vehicle.selling_price || 0,
+        safety_charge: vehicle.safety_charge || 0,
+        warranty_charge: vehicle.warranty_charge || 0,
         omvic_fee: vehicle.omvic_fee || 0,
-        referral_amount: vehicle.referral_amount || 0,
         buyer_name: vehicle.buyer_name || "",
+        salesperson_id: vehicle.salesperson_id || "",
+        referral_amount: vehicle.referral_amount || 0,
         payment_method: vehicle.payment_method || "",
         deposit_amount: vehicle.deposit_amount || 0,
-        salesperson_id: vehicle.salesperson_id || "",
         notes: vehicle.notes || "",
       })
     } else {
@@ -114,6 +120,77 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
     setActiveTab("basic")
     setVinError("")
   }, [vehicle, open])
+
+  // ========== AUTO-CALCULATED FIELDS (Ontario 13% HST) ==========
+  const calculations = useMemo(() => {
+    // Purchase Side
+    const purchaseTax = form.purchase_price * TAX_RATE
+    const totalPurchasePrice = form.purchase_price + purchaseTax
+    
+    const safetyTax = form.safety_cost * TAX_RATE
+    const totalSafetyCost = form.safety_cost + safetyTax
+    
+    const warrantyTax = form.warranty_cost * TAX_RATE
+    const totalWarrantyCost = form.warranty_cost + warrantyTax
+    
+    const gasTax = form.gas * TAX_RATE
+    const totalGasCost = form.gas + gasTax
+    
+    // Total All-In Cost (what we paid)
+    const totalCost = totalPurchasePrice + totalSafetyCost + form.floorplan_interest_cost + totalGasCost + totalWarrantyCost + form.referral_amount
+    
+    // Sale Side
+    const saleSubtotal = form.selling_price + form.safety_charge + form.warranty_charge + form.omvic_fee
+    const saleTax = saleSubtotal * TAX_RATE
+    const totalSalePrice = saleSubtotal + saleTax
+    
+    // Profit Calculation (per ChatGPT spec)
+    // Profit = (SellingPrice + SafetyCharge + WarrantyCharge + OMVICFee) 
+    //        - (TotalPurchasePrice + SafetyCost + SafetyTax + FloorplanInterestCost + Gas + GasTax + WarrantyCost + WarrantyTax + ReferralAmount)
+    // Note: DO NOT include SellTax in profit (tax is pass-through)
+    const grossProfit = form.selling_price > 0 
+      ? (form.selling_price + form.safety_charge + form.warranty_charge + form.omvic_fee) - totalCost
+      : 0
+    
+    // Estimated profit using asking price
+    const estimatedProfit = form.asking_price > 0
+      ? (form.asking_price + form.safety_charge + form.warranty_charge + form.omvic_fee) - totalCost
+      : 0
+    
+    const profitMargin = form.selling_price > 0 
+      ? (grossProfit / form.selling_price) * 100 
+      : 0
+
+    return {
+      // Purchase taxes
+      purchaseTax,
+      totalPurchasePrice,
+      safetyTax,
+      totalSafetyCost,
+      warrantyTax,
+      totalWarrantyCost,
+      gasTax,
+      totalGasCost,
+      // Totals
+      totalCost,
+      // Sale
+      saleSubtotal,
+      saleTax,
+      totalSalePrice,
+      // Profit
+      grossProfit,
+      estimatedProfit,
+      profitMargin,
+    }
+  }, [form])
+
+  const lotDays = calculateLotDays(form.date_acquired, form.date_sold)
+  
+  const getLotDaysColor = () => {
+    if (lotDays < 30) return "bg-green-100 text-green-800 border-green-300"
+    if (lotDays < 60) return "bg-yellow-100 text-yellow-800 border-yellow-300"
+    return "bg-red-100 text-red-800 border-red-300"
+  }
 
   const handleDecodeVIN = async () => {
     if (form.vin.length !== 17) {
@@ -152,6 +229,7 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
         ...form,
         date_sold: form.date_sold || null,
         salesperson_id: form.salesperson_id || null,
+        tax_rate: TAX_RATE,
       }
       const url = vehicle ? `/api/vehicles/${vehicle.id}` : "/api/vehicles"
       const method = vehicle ? "PUT" : "POST"
@@ -182,27 +260,24 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
     }
   }
 
-  const totalCost = calculateVehicleTotalCost(form)
-  const lotDays = calculateLotDays(form.date_acquired, form.date_sold)
-  const estimatedProfit = (form.asking_price || 0) - totalCost
-  const actualProfit = form.status === "SOLD" ? calculateNetProfit({ ...form, purchase_price: form.purchase_price }) : null
-
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <Car className="h-5 w-5" />
             {vehicle ? `Edit Vehicle - ${vehicle.stock_number}` : "Add New Vehicle"}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="grid grid-cols-4 gap-4 mb-4">
+        {/* Summary Cards */}
+        <div className="grid grid-cols-5 gap-3 mb-4">
           <Card className="p-3">
             <div className="flex items-center gap-2">
               <DollarSign className="h-4 w-4 text-muted-foreground" />
               <div>
                 <p className="text-xs text-muted-foreground">Total Cost</p>
-                <p className="text-lg font-bold">{formatCurrency(totalCost)}</p>
+                <p className="text-lg font-bold">{formatCurrency(calculations.totalCost)}</p>
               </div>
             </div>
           </Card>
@@ -211,42 +286,53 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
               <TrendingUp className="h-4 w-4 text-muted-foreground" />
               <div>
                 <p className="text-xs text-muted-foreground">Est. Profit</p>
-                <p className={`text-lg font-bold ${estimatedProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
-                  {formatCurrency(estimatedProfit)}
+                <p className={`text-lg font-bold ${calculations.estimatedProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
+                  {formatCurrency(calculations.estimatedProfit)}
                 </p>
               </div>
             </div>
           </Card>
           <Card className="p-3">
-            <div className="flex items-center gap-2">
-              <Car className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <p className="text-xs text-muted-foreground">Lot Days</p>
-                <p className="text-lg font-bold">{lotDays}</p>
+            <div>
+              <p className="text-xs text-muted-foreground">Lot Days</p>
+              <div className={`inline-block px-2 py-1 rounded border text-lg font-bold ${getLotDaysColor()}`}>
+                {lotDays}
               </div>
             </div>
           </Card>
           <Card className="p-3">
-            <Badge variant={form.status === "AVAILABLE" ? "success" : form.status === "PENDING" ? "warning" : "default"} className="text-sm">
-              {form.status}
-            </Badge>
-            {actualProfit !== null && (
-              <p className={`text-sm font-medium mt-1 ${actualProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
-                Profit: {formatCurrency(actualProfit)}
-              </p>
-            )}
+            <div>
+              <p className="text-xs text-muted-foreground">Status</p>
+              <Badge variant={form.status === "AVAILABLE" ? "success" : form.status === "PENDING" ? "warning" : "default"} className="text-sm mt-1">
+                {form.status}
+              </Badge>
+            </div>
           </Card>
+          {form.selling_price > 0 && (
+            <Card className={`p-3 ${calculations.grossProfit >= 0 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
+              <div>
+                <p className="text-xs text-muted-foreground">Actual Profit</p>
+                <p className={`text-lg font-bold ${calculations.grossProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
+                  {formatCurrency(calculations.grossProfit)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {calculations.profitMargin.toFixed(1)}% margin
+                </p>
+              </div>
+            </Card>
+          )}
         </div>
 
         <form onSubmit={handleSubmit}>
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="basic">Basic Info</TabsTrigger>
-              <TabsTrigger value="costs">Costs</TabsTrigger>
+              <TabsTrigger value="purchase">Purchase & Costs</TabsTrigger>
               <TabsTrigger value="sale">Sale Info</TabsTrigger>
               <TabsTrigger value="notes">Notes</TabsTrigger>
             </TabsList>
 
+            {/* BASIC INFO TAB */}
             <TabsContent value="basic" className="space-y-4 mt-4">
               <div className="space-y-2">
                 <Label htmlFor="vin">VIN</Label>
@@ -297,7 +383,7 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
                   <Input id="colour" value={form.colour || form.exterior_color} onChange={(e) => setForm({ ...form, colour: e.target.value, exterior_color: e.target.value })} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="mileage">Odometer</Label>
+                  <Label htmlFor="mileage">Odometer (km)</Label>
                   <Input id="mileage" type="number" value={form.mileage} onChange={(e) => setForm({ ...form, mileage: parseInt(e.target.value) || 0 })} />
                 </div>
                 <div className="space-y-2">
@@ -313,14 +399,10 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="date_acquired">Date Acquired</Label>
+                  <Label htmlFor="date_acquired">Date Purchased (YYYY-MM-DD)</Label>
                   <Input id="date_acquired" type="date" value={form.date_acquired} onChange={(e) => setForm({ ...form, date_acquired: e.target.value })} required />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="purchase_price">Purchase Price</Label>
-                  <Input id="purchase_price" type="number" step="0.01" value={form.purchase_price} onChange={(e) => setForm({ ...form, purchase_price: parseFloat(e.target.value) || 0 })} required />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="asking_price">Asking Price</Label>
@@ -329,126 +411,245 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
               </div>
             </TabsContent>
 
-            <TabsContent value="costs" className="space-y-4 mt-4">
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label>Safety Estimate</Label>
-                  <Input type="number" step="0.01" value={form.safety_estimate} onChange={(e) => setForm({ ...form, safety_estimate: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Safety Cost (Actual)</Label>
-                  <Input type="number" step="0.01" value={form.safety_cost} onChange={(e) => setForm({ ...form, safety_cost: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Safety Charge (to Customer)</Label>
-                  <Input type="number" step="0.01" value={form.safety_charge} onChange={(e) => setForm({ ...form, safety_charge: parseFloat(e.target.value) || 0 })} />
-                </div>
-              </div>
+            {/* PURCHASE & COSTS TAB */}
+            <TabsContent value="purchase" className="space-y-4 mt-4">
+              {/* Purchase Price Section */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Calculator className="h-4 w-4" />
+                    Vehicle Purchase
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Purchase Price (Pre-Tax)</Label>
+                    <Input type="number" step="0.01" value={form.purchase_price} onChange={(e) => setForm({ ...form, purchase_price: parseFloat(e.target.value) || 0 })} required />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Tax (13% HST) <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                    <Input type="text" value={formatCurrency(calculations.purchaseTax)} disabled className="bg-muted" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Total Purchase Price <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                    <Input type="text" value={formatCurrency(calculations.totalPurchasePrice)} disabled className="bg-muted font-semibold" />
+                  </div>
+                </CardContent>
+              </Card>
 
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label>Warranty Cost</Label>
-                  <Input type="number" step="0.01" value={form.warranty_cost} onChange={(e) => setForm({ ...form, warranty_cost: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Warranty Charge (to Customer)</Label>
-                  <Input type="number" step="0.01" value={form.warranty_charge} onChange={(e) => setForm({ ...form, warranty_charge: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>OMVIC Fee</Label>
-                  <Input type="number" step="0.01" value={form.omvic_fee} onChange={(e) => setForm({ ...form, omvic_fee: parseFloat(e.target.value) || 0 })} />
-                </div>
-              </div>
+              {/* Safety Section */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Safety Inspection</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Safety Estimate <span className="text-xs text-muted-foreground">(info only)</span></Label>
+                    <Input type="number" step="0.01" value={form.safety_estimate} onChange={(e) => setForm({ ...form, safety_estimate: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Safety Cost (Pre-Tax)</Label>
+                    <Input type="number" step="0.01" value={form.safety_cost} onChange={(e) => setForm({ ...form, safety_cost: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Tax on Safety (13%) <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                    <Input type="text" value={formatCurrency(calculations.safetyTax)} disabled className="bg-muted" />
+                  </div>
+                </CardContent>
+              </Card>
 
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label>Floorplan Interest</Label>
-                  <Input type="number" step="0.01" value={form.floorplan_interest_cost} onChange={(e) => setForm({ ...form, floorplan_interest_cost: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Gas</Label>
-                  <Input type="number" step="0.01" value={form.gas} onChange={(e) => setForm({ ...form, gas: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Referral Amount</Label>
-                  <Input type="number" step="0.01" value={form.referral_amount} onChange={(e) => setForm({ ...form, referral_amount: parseFloat(e.target.value) || 0 })} />
-                </div>
-              </div>
+              {/* Warranty Section */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Warranty</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Warranty Cost (Pre-Tax)</Label>
+                    <Input type="number" step="0.01" value={form.warranty_cost} onChange={(e) => setForm({ ...form, warranty_cost: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Tax on Warranty (13%) <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                    <Input type="text" value={formatCurrency(calculations.warrantyTax)} disabled className="bg-muted" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Total Warranty Cost <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                    <Input type="text" value={formatCurrency(calculations.totalWarrantyCost)} disabled className="bg-muted" />
+                  </div>
+                </CardContent>
+              </Card>
 
-              <Card className="bg-muted/50">
+              {/* Other Costs */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Other Costs</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-4 gap-4">
+                  <div className="space-y-2">
+                    <Label>Floorplan Interest + Fees</Label>
+                    <Input type="number" step="0.01" value={form.floorplan_interest_cost} onChange={(e) => setForm({ ...form, floorplan_interest_cost: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Gas (Pre-Tax)</Label>
+                    <Input type="number" step="0.01" value={form.gas} onChange={(e) => setForm({ ...form, gas: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Gas Tax (13%) <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                    <Input type="text" value={formatCurrency(calculations.gasTax)} disabled className="bg-muted" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Referral Amount</Label>
+                    <Input type="number" step="0.01" value={form.referral_amount} onChange={(e) => setForm({ ...form, referral_amount: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Total Cost Summary */}
+              <Card className="bg-primary/5 border-primary/20">
                 <CardContent className="pt-4">
                   <div className="flex justify-between items-center">
-                    <span className="text-lg font-medium">Total Vehicle Cost:</span>
-                    <span className="text-2xl font-bold">{formatCurrency(totalCost)}</span>
+                    <div>
+                      <span className="text-lg font-medium">TOTAL VEHICLE COST (All-In)</span>
+                      <p className="text-sm text-muted-foreground">Purchase + Safety + Warranty + Floorplan + Gas + Referral (all with taxes)</p>
+                    </div>
+                    <span className="text-3xl font-bold">{formatCurrency(calculations.totalCost)}</span>
                   </div>
                 </CardContent>
               </Card>
             </TabsContent>
 
+            {/* SALE INFO TAB */}
             <TabsContent value="sale" className="space-y-4 mt-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Selling Price</Label>
-                  <Input type="number" step="0.01" value={form.selling_price} onChange={(e) => setForm({ ...form, selling_price: parseFloat(e.target.value) || 0 })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Date Sold</Label>
-                  <Input type="date" value={form.date_sold} onChange={(e) => setForm({ ...form, date_sold: e.target.value })} />
-                </div>
-              </div>
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Sale Details</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Date Sold (YYYY-MM-DD)</Label>
+                      <Input type="date" value={form.date_sold} onChange={(e) => setForm({ ...form, date_sold: e.target.value })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Buyer Name</Label>
+                      <Input value={form.buyer_name} onChange={(e) => setForm({ ...form, buyer_name: e.target.value })} />
+                    </div>
+                  </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Buyer Name</Label>
-                  <Input value={form.buyer_name} onChange={(e) => setForm({ ...form, buyer_name: e.target.value })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Salesperson</Label>
-                  <Select value={form.salesperson_id || "none"} onValueChange={(value) => setForm({ ...form, salesperson_id: value === "none" ? "" : value })}>
-                    <SelectTrigger><SelectValue placeholder="Select salesperson" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      {salesUsers.map((user) => (
-                        <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Salesperson</Label>
+                      <Select value={form.salesperson_id || "none"} onValueChange={(value) => setForm({ ...form, salesperson_id: value === "none" ? "" : value })}>
+                        <SelectTrigger><SelectValue placeholder="Select salesperson" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Not assigned</SelectItem>
+                          {salesUsers.map((user) => (
+                            <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Payment Method</Label>
+                      <Select value={form.payment_method || "none"} onValueChange={(value) => setForm({ ...form, payment_method: value === "none" ? "" : value })}>
+                        <SelectTrigger><SelectValue placeholder="Select payment method" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">Not specified</SelectItem>
+                          <SelectItem value="CASH">Cash</SelectItem>
+                          <SelectItem value="CERTIFIED_CHEQUE">Certified Cheque</SelectItem>
+                          <SelectItem value="BANK_DRAFT">Bank Draft</SelectItem>
+                          <SelectItem value="E_TRANSFER">E-Transfer</SelectItem>
+                          <SelectItem value="FINANCE">Finance</SelectItem>
+                          <SelectItem value="DEBIT">Debit</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Payment Method</Label>
-                  <Select value={form.payment_method || "none"} onValueChange={(value) => setForm({ ...form, payment_method: value === "none" ? "" : value })}>
-                    <SelectTrigger><SelectValue placeholder="Select payment method" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Not specified</SelectItem>
-                      <SelectItem value="CASH">Cash</SelectItem>
-                      <SelectItem value="FINANCE">Finance</SelectItem>
-                      <SelectItem value="CERTIFIED_CHEQUE">Certified Cheque</SelectItem>
-                      <SelectItem value="E_TRANSFER">E-Transfer</SelectItem>
-                      <SelectItem value="BANK_DRAFT">Bank Draft</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Deposit Amount</Label>
-                  <Input type="number" step="0.01" value={form.deposit_amount} onChange={(e) => setForm({ ...form, deposit_amount: parseFloat(e.target.value) || 0 })} />
-                </div>
-              </div>
+                  <div className="space-y-2">
+                    <Label>Deposit Amount <span className="text-xs text-muted-foreground">(info only - not used in calculations)</span></Label>
+                    <Input type="number" step="0.01" value={form.deposit_amount} onChange={(e) => setForm({ ...form, deposit_amount: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                </CardContent>
+              </Card>
 
+              {/* Sale Pricing */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <DollarSign className="h-4 w-4" />
+                    Sale Pricing
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-4 gap-4">
+                    <div className="space-y-2">
+                      <Label>Selling Price (Pre-Tax)</Label>
+                      <Input type="number" step="0.01" value={form.selling_price} onChange={(e) => setForm({ ...form, selling_price: parseFloat(e.target.value) || 0 })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Safety Charge</Label>
+                      <Input type="number" step="0.01" value={form.safety_charge} onChange={(e) => setForm({ ...form, safety_charge: parseFloat(e.target.value) || 0 })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Warranty Charge</Label>
+                      <Input type="number" step="0.01" value={form.warranty_charge} onChange={(e) => setForm({ ...form, warranty_charge: parseFloat(e.target.value) || 0 })} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>OMVIC Fee</Label>
+                      <Input type="number" step="0.01" value={form.omvic_fee} onChange={(e) => setForm({ ...form, omvic_fee: parseFloat(e.target.value) || 0 })} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label>Subtotal <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                      <Input type="text" value={formatCurrency(calculations.saleSubtotal)} disabled className="bg-muted" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Sell Tax (13% HST) <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                      <Input type="text" value={formatCurrency(calculations.saleTax)} disabled className="bg-muted" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Total Sale Price <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                      <Input type="text" value={formatCurrency(calculations.totalSalePrice)} disabled className="bg-muted font-semibold" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Profit Section */}
               {form.selling_price > 0 && (
-                <Card className="bg-muted/50">
-                  <CardContent className="pt-4">
-                    <div className="grid grid-cols-2 gap-4">
+                <Card className={`${calculations.grossProfit >= 0 ? "bg-green-50 border-green-300" : "bg-red-50 border-red-300"}`}>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4" />
+                      Profit Calculation
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 gap-6">
                       <div>
-                        <p className="text-sm text-muted-foreground">Total Revenue</p>
-                        <p className="text-xl font-bold">{formatCurrency((form.selling_price || 0) + (form.safety_charge || 0) + (form.warranty_charge || 0))}</p>
+                        <p className="text-sm text-muted-foreground mb-2">Revenue (Vehicle + Safety + Warranty + OMVIC)</p>
+                        <p className="text-xl font-semibold">{formatCurrency(calculations.saleSubtotal)}</p>
                       </div>
                       <div>
-                        <p className="text-sm text-muted-foreground">Net Profit</p>
-                        <p className={`text-xl font-bold ${calculateNetProfit({ ...form, purchase_price: form.purchase_price }) >= 0 ? "text-green-600" : "text-red-600"}`}>
-                          {formatCurrency(calculateNetProfit({ ...form, purchase_price: form.purchase_price }))}
+                        <p className="text-sm text-muted-foreground mb-2">Total Cost (All-In)</p>
+                        <p className="text-xl font-semibold">{formatCurrency(calculations.totalCost)}</p>
+                      </div>
+                    </div>
+                    <hr className="my-4" />
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="text-lg font-medium">NET PROFIT</p>
+                        <p className="text-sm text-muted-foreground">(Tax is pass-through, not included)</p>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-4xl font-bold ${calculations.grossProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
+                          {formatCurrency(calculations.grossProfit)}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {calculations.profitMargin.toFixed(1)}% margin
                         </p>
                       </div>
                     </div>
@@ -457,25 +658,33 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
               )}
             </TabsContent>
 
+            {/* NOTES TAB */}
             <TabsContent value="notes" className="space-y-4 mt-4">
               <div className="space-y-2">
-                <Label>Notes</Label>
+                <Label htmlFor="notes">Notes</Label>
                 <textarea
-                  className="w-full min-h-[200px] rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  id="notes"
+                  className="w-full min-h-[200px] p-3 border rounded-md bg-background"
                   value={form.notes}
                   onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  placeholder="Add any notes about this vehicle..."
+                  placeholder="Enter any additional notes about this vehicle..."
                 />
               </div>
             </TabsContent>
           </Tabs>
 
           <div className="flex justify-between mt-6">
-            {vehicle && (
-              <Button type="button" variant="destructive" onClick={handleDelete} disabled={saving}>Delete</Button>
-            )}
-            <div className="flex gap-2 ml-auto">
-              <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <div>
+              {vehicle && (
+                <Button type="button" variant="destructive" onClick={handleDelete} disabled={saving}>
+                  Delete Vehicle
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
               <Button type="submit" disabled={saving}>
                 {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {vehicle ? "Save Changes" : "Add Vehicle"}

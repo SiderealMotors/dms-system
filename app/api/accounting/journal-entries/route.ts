@@ -52,6 +52,10 @@ export async function POST(request: NextRequest) {
   }
 
   entryData.created_by = user.id
+  entryData.status = entryData.status || "POSTED"
+  if (entryData.status === "POSTED" && !entryData.posted_at) {
+    entryData.posted_at = new Date().toISOString()
+  }
 
   // Create the journal entry
   const { data: entry, error: entryError } = await supabase
