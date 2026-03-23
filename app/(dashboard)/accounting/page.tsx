@@ -77,16 +77,16 @@ export default function AccountingPage() {
   const accountBalances = summaryData?.accountBalances || []
 
   // Group accounts by type for reports
-  const assetAccounts = accountBalances.filter((a: any) => a.type === "ASSET")
-  const liabilityAccounts = accountBalances.filter((a: any) => a.type === "LIABILITY")
-  const equityAccounts = accountBalances.filter((a: any) => a.type === "EQUITY")
-  const revenueAccounts = accountBalances.filter((a: any) => a.type === "REVENUE")
-  const expenseAccounts = accountBalances.filter((a: any) => a.type === "EXPENSE")
+  const assetAccounts: typeof accountBalances = accountBalances.filter((a: typeof accountBalances[0]) => a.type === "ASSET")
+  const liabilityAccounts: typeof accountBalances = accountBalances.filter((a) => a.type === "LIABILITY")
+  const equityAccounts: typeof accountBalances = accountBalances.filter((a) => a.type === "EQUITY")
+  const revenueAccounts: typeof accountBalances = accountBalances.filter((a) => a.type === "REVENUE")
+  const expenseAccounts: typeof accountBalances = accountBalances.filter((a) => a.type === "EXPENSE")
 
   // Export functions
   const exportTrialBalance = () => {
     const headers = ["Account Code", "Account Name", "Debit", "Credit"]
-    const rows = accountBalances.map((a: any) => [
+    const rows = accountBalances.map((a) => [
       a.code,
       a.name,
       a.balance > 0 && a.normalBalance === "DEBIT" ? a.balance.toFixed(2) : "",
@@ -229,7 +229,7 @@ export default function AccountingPage() {
                 <CardTitle className="text-lg">Assets</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                {assetAccounts.filter((a: any) => a.balance !== 0).map((account: any) => (
+                {assetAccounts.filter((a) => a.balance !== 0).map((account) => (
                   <div key={account.code} className="flex justify-between text-sm">
                     <span className="text-muted-foreground">{account.code} - {account.name}</span>
                     <span>{formatCurrency(account.balance)}</span>
@@ -247,7 +247,7 @@ export default function AccountingPage() {
                 <CardTitle className="text-lg">Liabilities</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                {liabilityAccounts.filter((a: any) => a.balance !== 0).map((account: any) => (
+                {liabilityAccounts.filter((a) => a.balance !== 0).map((account) => (
                   <div key={account.code} className="flex justify-between text-sm">
                     <span className="text-muted-foreground">{account.code} - {account.name}</span>
                     <span>{formatCurrency(account.balance)}</span>
@@ -404,7 +404,7 @@ export default function AccountingPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {accountBalances.map((account: any) => (
+                  {accountBalances.map((account) => (
                     <TableRow key={account.code}>
                       <TableCell className="font-mono">{account.code}</TableCell>
                       <TableCell>{account.name}</TableCell>
@@ -423,10 +423,10 @@ export default function AccountingPage() {
                   <TableRow>
                     <TableCell colSpan={3}>Total</TableCell>
                     <TableCell className="text-right font-bold">
-                      {formatCurrency(accountBalances.reduce((sum: number, a: any) => sum + a.debits, 0))}
+                      {formatCurrency(accountBalances.reduce((sum: number, a) => sum + a.debits, 0))}
                     </TableCell>
                     <TableCell className="text-right font-bold">
-                      {formatCurrency(accountBalances.reduce((sum: number, a: any) => sum + a.credits, 0))}
+                      {formatCurrency(accountBalances.reduce((sum: number, a) => sum + a.credits, 0))}
                     </TableCell>
                     <TableCell></TableCell>
                   </TableRow>

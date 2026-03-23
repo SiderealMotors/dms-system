@@ -1,6 +1,31 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextRequest, NextResponse } from "next/server"
 
+interface LineItem {
+  debit: number | null
+  credit: number | null
+  account: {
+    id: string
+    code: string
+    name: string
+    account_type: string
+    normal_balance: string
+  } | null
+  journal_entry: {
+    status: string
+  }
+}
+
+interface AccountBalance {
+  code: string
+  name: string
+  type: string
+  normalBalance: string
+  debits: number
+  credits: number
+  balance: number
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient()
 
@@ -16,17 +41,9 @@ export async function GET(request: NextRequest) {
     .eq("journal_entry.status", "POSTED")
 
   // Calculate account balances
-  const accountBalances: Record<string, { 
-    code: string
-    name: string
-    type: string
-    normalBalance: string
-    debits: number
-    credits: number
-    balance: number 
-  }> = {}
+  const accountBalances: Record<string, AccountBalance> = {}
 
-  lineItems?.forEach((item: any) => {
+  (lineItems as LineItem[] | null)?.forEach((item) => {
     if (!item.account) return
     const accountId = item.account.id
     if (!accountBalances[accountId]) {
