@@ -1,6 +1,5 @@
 "use client"
 
-import { useState, useEffect } from "react"
 import useSWR from "swr"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -13,12 +12,15 @@ import type { Vehicle, Deal, GLAccount, JournalEntry } from "@/lib/types"
 const fetcher = (url: string) => fetch(url).then(res => res.json())
 
 export default function ReportsPage() {
-  const [reportType, setReportType] = useState("inventory")
-  
-  const { data: vehicles } = useSWR<Vehicle[]>("/api/vehicles", fetcher)
-  const { data: deals } = useSWR<Deal[]>("/api/deals", fetcher)
-  const { data: accounts } = useSWR<GLAccount[]>("/api/accounting/accounts", fetcher)
-  const { data: journalEntries } = useSWR<JournalEntry[]>("/api/accounting/journal-entries", fetcher)
+  const { data: vehiclesData } = useSWR("/api/vehicles", fetcher)
+  const { data: dealsData } = useSWR("/api/deals", fetcher)
+  const { data: accountsData } = useSWR("/api/accounting/accounts", fetcher)
+  const { data: entriesData } = useSWR("/api/accounting/journal-entries", fetcher)
+
+  const vehicles: Vehicle[] = vehiclesData?.data || []
+  const deals: Deal[] = dealsData?.data || []
+  const accounts: GLAccount[] = accountsData?.data || []
+  const journalEntries: JournalEntry[] = entriesData?.data || []
 
   // Calculate inventory stats
   const inventoryStats = {
