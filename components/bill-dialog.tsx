@@ -161,12 +161,12 @@ export function BillDialog({ open, onOpenChange, vendors, onSuccess }: BillDialo
           {/* Vendor */}
           <div className="space-y-2">
             <Label>Vendor (Optional)</Label>
-            <Select value={form.vendor_id} onValueChange={(v) => setForm(prev => ({ ...prev, vendor_id: v }))}>
+            <Select value={form.vendor_id || "none"} onValueChange={(v) => setForm(prev => ({ ...prev, vendor_id: v === "none" ? "" : v }))}>
               <SelectTrigger>
                 <SelectValue placeholder="Select vendor..." />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">No Vendor</SelectItem>
+                <SelectItem value="none">No Vendor</SelectItem>
                 {vendors.map(vendor => (
                   <SelectItem key={vendor.id} value={vendor.id}>
                     {vendor.name}
@@ -180,12 +180,12 @@ export function BillDialog({ open, onOpenChange, vendors, onSuccess }: BillDialo
           {(form.bill_type === "vehicle_purchase" || form.bill_type === "safety_inspection" || form.bill_type === "reconditioning" || form.bill_type === "parts") && (
             <div className="space-y-2">
               <Label>Link to Vehicle (Optional)</Label>
-              <Select value={form.vehicle_id} onValueChange={(v) => setForm(prev => ({ ...prev, vehicle_id: v }))}>
+              <Select value={form.vehicle_id || "none"} onValueChange={(v) => setForm(prev => ({ ...prev, vehicle_id: v === "none" ? "" : v }))}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select vehicle..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">No Vehicle</SelectItem>
+                  <SelectItem value="none">No Vehicle</SelectItem>
                   {vehicles.map(vehicle => (
                     <SelectItem key={vehicle.id} value={vehicle.id}>
                       {vehicle.stock_number} - {vehicle.year} {vehicle.make} {vehicle.model}

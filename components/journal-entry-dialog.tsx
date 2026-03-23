@@ -386,7 +386,7 @@ export function JournalEntryDialog({ open, onOpenChange, onSuccess, entry, vehic
         throw new Error(data.error || "Failed to save journal entry")
       }
 
-onOpenChange(false)
+      onOpenChange(false)
       onSuccess?.()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save")

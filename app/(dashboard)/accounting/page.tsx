@@ -28,17 +28,11 @@ import {
   Wallet,
 } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
+import type { GLAccount, JournalEntry, AccountsPayable, AccountsReceivable, Vendor } from "@/lib/types"
 import { JournalEntryDialog } from "@/components/journal-entry-dialog"
 import { BillDialog } from "@/components/bill-dialog"
 import { InvoiceDialog } from "@/components/invoice-dialog"
 import { PaymentDialog } from "@/components/payment-dialog"
-import type { 
-  GLAccount, 
-  JournalEntry, 
-  AccountsPayable,
-  AccountsReceivable,
-  Vendor,
-} from "@/lib/types"
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 

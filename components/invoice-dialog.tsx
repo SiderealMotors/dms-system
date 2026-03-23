@@ -135,12 +135,12 @@ export function InvoiceDialog({ open, onOpenChange, onSuccess }: InvoiceDialogPr
           {/* Customer */}
           <div className="space-y-2">
             <Label>Customer (Optional)</Label>
-            <Select value={form.customer_id} onValueChange={(v) => setForm(prev => ({ ...prev, customer_id: v }))}>
+            <Select value={form.customer_id || "none"} onValueChange={(v) => setForm(prev => ({ ...prev, customer_id: v === "none" ? "" : v }))}>
               <SelectTrigger>
                 <SelectValue placeholder="Select customer..." />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">Walk-in Customer</SelectItem>
+                <SelectItem value="none">Walk-in Customer</SelectItem>
                 {customers.map(customer => (
                   <SelectItem key={customer.id} value={customer.id}>
                     {customer.first_name} {customer.last_name}
@@ -153,12 +153,12 @@ export function InvoiceDialog({ open, onOpenChange, onSuccess }: InvoiceDialogPr
           {/* Link to Vehicle */}
           <div className="space-y-2">
             <Label>Vehicle Sale (Auto-populate)</Label>
-            <Select value={form.vehicle_id} onValueChange={handleVehicleChange}>
+            <Select value={form.vehicle_id || "none"} onValueChange={(v) => handleVehicleChange(v === "none" ? "" : v)}>
               <SelectTrigger>
                 <SelectValue placeholder="Select sold vehicle..." />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">Manual Entry</SelectItem>
+                <SelectItem value="none">Manual Entry</SelectItem>
                 {vehicles.map(vehicle => (
                   <SelectItem key={vehicle.id} value={vehicle.id}>
                     {vehicle.stock_number} - {vehicle.year} {vehicle.make} {vehicle.model}
