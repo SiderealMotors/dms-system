@@ -10,12 +10,12 @@ import {
   BarChart3,
   DollarSign,
   LayoutDashboard,
-  UserCircle,
   LogOut,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { createClient } from "@/lib/supabase/client"
-import { useRouter } from "next/navigation"
+import { useUser } from "@/components/providers/user-provider"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -28,13 +28,7 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname()
-  const router = useRouter()
-  const supabase = createClient()
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut()
-    router.push("/auth/login")
-  }
+  const { user, signOut } = useUser()
 
   return (
     <div className="flex h-full w-64 flex-col border-r bg-card">
@@ -64,23 +58,26 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t p-3">
-        <Link
-          href="/profile"
-          className={cn(
-            "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-            pathname === "/profile"
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-          )}
-        >
-          <UserCircle className="h-5 w-5" />
-          Profile
-        </Link>
+      <div className="border-t p-3 space-y-3">
+        {user && (
+          <div className="flex items-center gap-3 px-3 py-2">
+            <Avatar className="h-8 w-8">
+              <AvatarFallback className="text-xs">
+                {user.name?.slice(0, 2).toUpperCase() || "U"}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex-1 overflow-hidden">
+              <p className="text-sm font-medium truncate">{user.name}</p>
+              <Badge variant="secondary" className="text-xs">
+                {user.role}
+              </Badge>
+            </div>
+          </div>
+        )}
         <Button
           variant="ghost"
           className="w-full justify-start gap-3 px-3 text-muted-foreground hover:text-foreground"
-          onClick={handleSignOut}
+          onClick={signOut}
         >
           <LogOut className="h-5 w-5" />
           Sign Out
