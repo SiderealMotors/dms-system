@@ -34,18 +34,20 @@ export interface Vehicle {
   date_sold?: string
   notes?: string
   photos: string[]
-  // Cost fields
+  // Cost fields (Purchase & Costs section)
   tax_rate?: number
-  safety_estimate?: number
+  miscellaneous_cost?: number
   safety_cost?: number
-  safety_charge?: number
-  warranty_cost?: number
-  warranty_charge?: number
-  floorplan_interest_cost?: number
+  safety_estimate?: number
   gas?: number
+  warranty_cost?: number
+  floorplan_interest_cost?: number
+  // Sale fields (Sale Info section)
+  safety_charge?: number
+  warranty_charge?: number
   omvic_fee?: number
-  referral_amount?: number
-  // Sale fields
+  registration_fee?: number  // Not taxable
+  referral_amount?: number   // Not taxable - income to dealership
   buyer_name?: string
   payment_method?: string
   deposit_amount?: number

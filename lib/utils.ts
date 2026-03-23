@@ -29,6 +29,7 @@ export function formatNumber(num: number): string {
 // Pre-tax cost (for profit calculation - excludes taxes)
 export function calculateVehiclePreTaxCost(vehicle: {
   purchase_price: number
+  miscellaneous_cost?: number
   safety_cost?: number
   warranty_cost?: number
   floorplan_interest_cost?: number
@@ -36,6 +37,7 @@ export function calculateVehiclePreTaxCost(vehicle: {
 }): number {
   return (
     (vehicle.purchase_price || 0) +
+    (vehicle.miscellaneous_cost || 0) +
     (vehicle.safety_cost || 0) +
     (vehicle.warranty_cost || 0) +
     (vehicle.floorplan_interest_cost || 0) +
@@ -46,14 +48,15 @@ export function calculateVehiclePreTaxCost(vehicle: {
 // Total cost including taxes (what we actually paid)
 export function calculateVehicleTotalCost(vehicle: {
   purchase_price: number
+  miscellaneous_cost?: number
   safety_cost?: number
   warranty_cost?: number
   floorplan_interest_cost?: number
   gas?: number
 }, taxRate: number = 0.13): number {
   const preTaxCost = calculateVehiclePreTaxCost(vehicle)
-  // Add tax on taxable items (purchase, safety, warranty, gas - not floorplan)
-  const taxableItems = (vehicle.purchase_price || 0) + (vehicle.safety_cost || 0) + (vehicle.warranty_cost || 0) + (vehicle.gas || 0)
+  // Add tax on taxable items (purchase, miscellaneous, safety, warranty, gas - not floorplan)
+  const taxableItems = (vehicle.purchase_price || 0) + (vehicle.miscellaneous_cost || 0) + (vehicle.safety_cost || 0) + (vehicle.warranty_cost || 0) + (vehicle.gas || 0)
   return preTaxCost + (taxableItems * taxRate)
 }
 
@@ -86,6 +89,7 @@ export function calculateVehiclePreTaxRevenue(vehicle: {
 export function calculateNetProfit(vehicle: {
   selling_price?: number
   purchase_price: number
+  miscellaneous_cost?: number
   safety_cost?: number
   safety_charge?: number
   warranty_cost?: number
