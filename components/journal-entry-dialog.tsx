@@ -28,7 +28,8 @@ const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
 interface JournalEntryDialogProps {
   open: boolean
-  onClose: () => void
+  onOpenChange: (open: boolean) => void
+  onSuccess?: () => void
   entry?: JournalEntry | null
   vehicleId?: string // For auto-populating from vehicle sale
 }
@@ -63,7 +64,7 @@ const ENTRY_TEMPLATES = [
   { value: "custom", label: "Custom Entry" },
 ]
 
-export function JournalEntryDialog({ open, onClose, entry, vehicleId }: JournalEntryDialogProps) {
+export function JournalEntryDialog({ open, onOpenChange, onSuccess, entry, vehicleId }: JournalEntryDialogProps) {
   const [description, setDescription] = useState("")
   const [entryDate, setEntryDate] = useState(new Date().toISOString().split("T")[0])
   const [selectedTemplate, setSelectedTemplate] = useState("custom")
@@ -385,7 +386,8 @@ export function JournalEntryDialog({ open, onClose, entry, vehicleId }: JournalE
         throw new Error(data.error || "Failed to save journal entry")
       }
 
-      onClose()
+onOpenChange(false)
+      onSuccess?.()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save")
     } finally {
@@ -394,7 +396,7 @@ export function JournalEntryDialog({ open, onClose, entry, vehicleId }: JournalE
   }
 
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>

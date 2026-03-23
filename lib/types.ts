@@ -197,6 +197,107 @@ export interface JournalLineItem {
   account?: GLAccount
 }
 
+// Vendor types
+export interface Vendor {
+  id: string
+  name: string
+  contact_name?: string
+  email?: string
+  phone?: string
+  address?: string
+  notes?: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+// Accounts Payable types
+export type APARStatus = "UNPAID" | "PARTIAL" | "PAID"
+
+export interface AccountsPayable {
+  id: string
+  vendor_id?: string
+  vehicle_id?: string
+  bill_number?: string
+  bill_date: string
+  due_date?: string
+  description: string
+  amount: number
+  tax_amount: number
+  total_amount: number
+  amount_paid: number
+  status: APARStatus
+  journal_entry_id?: string
+  payment_journal_entry_id?: string
+  created_at: string
+  updated_at: string
+  vendor?: Vendor
+  vehicle?: Vehicle
+  journal_entry?: JournalEntry
+}
+
+// Accounts Receivable types
+export interface AccountsReceivable {
+  id: string
+  customer_id?: string
+  vehicle_id?: string
+  deal_id?: string
+  invoice_number: string
+  invoice_date: string
+  due_date?: string
+  description: string
+  subtotal: number
+  tax_amount: number
+  total_amount: number
+  amount_paid: number
+  status: APARStatus
+  journal_entry_id?: string
+  payment_journal_entry_id?: string
+  created_at: string
+  updated_at: string
+  customer?: Customer
+  vehicle?: Vehicle
+  deal?: Deal
+  journal_entry?: JournalEntry
+}
+
+// Accounting Summary types
+export interface AccountingSummary {
+  accountBalances: AccountBalance[]
+  apSummary: {
+    total: number
+    paid: number
+    outstanding: number
+    unpaidCount: number
+  }
+  arSummary: {
+    total: number
+    collected: number
+    outstanding: number
+    unpaidCount: number
+  }
+  financials: {
+    totalAssets: number
+    totalLiabilities: number
+    totalEquity: number
+    totalRevenue: number
+    totalExpenses: number
+    netIncome: number
+    cashBalance: number
+  }
+  recentEntries: JournalEntry[]
+}
+
+export interface AccountBalance {
+  code: string
+  name: string
+  type: AccountType
+  normalBalance: NormalBalance
+  debits: number
+  credits: number
+  balance: number
+}
+
 // Dashboard types
 export interface DashboardStats {
   totalVehicles: number
