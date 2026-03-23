@@ -25,22 +25,36 @@ export function formatNumber(num: number): string {
 }
 
 // Vehicle calculation utilities
-export function calculateVehicleTotalCost(vehicle: {
+
+// Pre-tax cost (for profit calculation - excludes taxes)
+export function calculateVehiclePreTaxCost(vehicle: {
   purchase_price: number
   safety_cost?: number
   warranty_cost?: number
   floorplan_interest_cost?: number
   gas?: number
-  referral_amount?: number
 }): number {
   return (
     (vehicle.purchase_price || 0) +
     (vehicle.safety_cost || 0) +
     (vehicle.warranty_cost || 0) +
     (vehicle.floorplan_interest_cost || 0) +
-    (vehicle.gas || 0) +
-    (vehicle.referral_amount || 0)
+    (vehicle.gas || 0)
   )
+}
+
+// Total cost including taxes (what we actually paid)
+export function calculateVehicleTotalCost(vehicle: {
+  purchase_price: number
+  safety_cost?: number
+  warranty_cost?: number
+  floorplan_interest_cost?: number
+  gas?: number
+}, taxRate: number = 0.13): number {
+  const preTaxCost = calculateVehiclePreTaxCost(vehicle)
+  // Add tax on taxable items (purchase, safety, warranty, gas - not floorplan)
+  const taxableItems = (vehicle.purchase_price || 0) + (vehicle.safety_cost || 0) + (vehicle.warranty_cost || 0) + (vehicle.gas || 0)
+  return preTaxCost + (taxableItems * taxRate)
 }
 
 export function calculateLotDays(dateAcquired: string, dateSold?: string): number {
@@ -50,21 +64,25 @@ export function calculateLotDays(dateAcquired: string, dateSold?: string): numbe
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24))
 }
 
-export function calculateGrossProfit(vehicle: {
+// Pre-tax revenue (for profit calculation)
+// Referral is income received by dealership, so it's added to revenue
+export function calculateVehiclePreTaxRevenue(vehicle: {
   selling_price?: number
-  purchase_price: number
   safety_charge?: number
   warranty_charge?: number
+  omvic_fee?: number
+  referral_amount?: number
 }): number {
-  if (!vehicle.selling_price) return 0
   return (
     (vehicle.selling_price || 0) +
     (vehicle.safety_charge || 0) +
-    (vehicle.warranty_charge || 0) -
-    (vehicle.purchase_price || 0)
+    (vehicle.warranty_charge || 0) +
+    (vehicle.omvic_fee || 0) +
+    (vehicle.referral_amount || 0)
   )
 }
 
+// Profit = Pre-Tax Revenue - Pre-Tax Cost (taxes are pass-through)
 export function calculateNetProfit(vehicle: {
   selling_price?: number
   purchase_price: number
@@ -74,11 +92,12 @@ export function calculateNetProfit(vehicle: {
   warranty_charge?: number
   floorplan_interest_cost?: number
   gas?: number
+  omvic_fee?: number
   referral_amount?: number
 }): number {
   if (!vehicle.selling_price) return 0
-  const revenue = (vehicle.selling_price || 0) + (vehicle.safety_charge || 0) + (vehicle.warranty_charge || 0)
-  const costs = calculateVehicleTotalCost(vehicle)
+  const revenue = calculateVehiclePreTaxRevenue(vehicle)
+  const costs = calculateVehiclePreTaxCost(vehicle)
   return revenue - costs
 }
 

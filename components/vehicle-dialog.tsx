@@ -123,7 +123,7 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
 
   // ========== AUTO-CALCULATED FIELDS (Ontario 13% HST) ==========
   const calculations = useMemo(() => {
-    // Purchase Side
+    // ===== PURCHASE SIDE (Pre-tax costs for profit calculation) =====
     const purchaseTax = form.purchase_price * TAX_RATE
     const totalPurchasePrice = form.purchase_price + purchaseTax
     
@@ -136,25 +136,34 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
     const gasTax = form.gas * TAX_RATE
     const totalGasCost = form.gas + gasTax
     
-    // Total All-In Cost (what we paid)
-    const totalCost = totalPurchasePrice + totalSafetyCost + form.floorplan_interest_cost + totalGasCost + totalWarrantyCost + form.referral_amount
+    // Pre-tax cost total (for profit calculation - excludes taxes we paid)
+    const preTaxCost = form.purchase_price + form.safety_cost + form.warranty_cost + form.floorplan_interest_cost + form.gas
     
-    // Sale Side
+    // Total All-In Cost including taxes (what we actually paid out)
+    const totalCostWithTax = totalPurchasePrice + totalSafetyCost + totalWarrantyCost + form.floorplan_interest_cost + totalGasCost
+    
+    // ===== SALE SIDE =====
+    // Pre-tax revenue (for profit calculation)
+    // Referral is income received by the dealership, so it's added to revenue
+    const preTaxRevenue = form.selling_price + form.safety_charge + form.warranty_charge + form.omvic_fee + form.referral_amount
+    
     const saleSubtotal = form.selling_price + form.safety_charge + form.warranty_charge + form.omvic_fee
     const saleTax = saleSubtotal * TAX_RATE
     const totalSalePrice = saleSubtotal + saleTax
     
-    // Profit Calculation (per ChatGPT spec)
-    // Profit = (SellingPrice + SafetyCharge + WarrantyCharge + OMVICFee) 
-    //        - (TotalPurchasePrice + SafetyCost + SafetyTax + FloorplanInterestCost + Gas + GasTax + WarrantyCost + WarrantyTax + ReferralAmount)
-    // Note: DO NOT include SellTax in profit (tax is pass-through)
+    // ===== PROFIT CALCULATION (PRE-TAX BASED) =====
+    // Profit = Pre-Tax Revenue - Pre-Tax Costs
+    // Revenue includes: Selling Price + Safety Charge + Warranty Charge + OMVIC Fee + Referral Amount
+    // Costs include: Purchase Price + Safety Cost + Warranty Cost + Floorplan Interest + Gas
+    // NOTE: Taxes are pass-through and NOT included in profit calculation
     const grossProfit = form.selling_price > 0 
-      ? (form.selling_price + form.safety_charge + form.warranty_charge + form.omvic_fee) - totalCost
+      ? preTaxRevenue - preTaxCost
       : 0
     
-    // Estimated profit using asking price
+    // Estimated profit using asking price (for unsold vehicles)
+    const estimatedRevenue = form.asking_price + form.safety_charge + form.warranty_charge + form.omvic_fee + form.referral_amount
     const estimatedProfit = form.asking_price > 0
-      ? (form.asking_price + form.safety_charge + form.warranty_charge + form.omvic_fee) - totalCost
+      ? estimatedRevenue - preTaxCost
       : 0
     
     const profitMargin = form.selling_price > 0 
@@ -162,7 +171,7 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
       : 0
 
     return {
-      // Purchase taxes
+      // Purchase taxes (displayed for reference)
       purchaseTax,
       totalPurchasePrice,
       safetyTax,
@@ -172,12 +181,14 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
       gasTax,
       totalGasCost,
       // Totals
-      totalCost,
+      preTaxCost,
+      totalCost: totalCostWithTax,
       // Sale
+      preTaxRevenue,
       saleSubtotal,
       saleTax,
       totalSalePrice,
-      // Profit
+      // Profit (pre-tax based)
       grossProfit,
       estimatedProfit,
       profitMargin,
