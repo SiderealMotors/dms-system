@@ -1,6 +1,0 @@
-# In your extracted project folder
-git init
-git remote add origin https://github.com/SiderealMotors/dms-system.git
-git add .
-git commit -m "Initial commit"
-git push -f origin main
