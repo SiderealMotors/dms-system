@@ -3,53 +3,37 @@
 import { useState } from "react"
 import useSWR from "swr"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Phone, Mail, User } from "lucide-react"
-import { formatDate } from "@/lib/utils"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Plus, Users, UserPlus, Target, CheckCircle } from "lucide-react"
 import type { Lead, LeadStatus } from "@/lib/types"
 import { LeadDialog } from "@/components/lead-dialog"
+import { LeadKanban } from "@/components/lead-kanban"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
-const statusColors: Record<LeadStatus, "default" | "secondary" | "warning" | "success"> = {
-  NEW_LEAD: "default",
-  CONTACTED: "secondary",
-  NEGOTIATING: "warning",
-  CLOSED: "success",
-}
-
-const statusLabels: Record<LeadStatus, string> = {
-  NEW_LEAD: "New Lead",
-  CONTACTED: "Contacted",
-  NEGOTIATING: "Negotiating",
-  CLOSED: "Closed",
-}
-
 export default function CRMPage() {
-  const [statusFilter, setStatusFilter] = useState<string>("all")
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [view, setView] = useState<"kanban" | "list">("kanban")
 
-  const queryParams = new URLSearchParams()
-  if (statusFilter !== "all") queryParams.set("status", statusFilter)
-
-  const { data, mutate, isLoading } = useSWR(
-    `/api/leads?${queryParams.toString()}`,
-    fetcher
-  )
+  const { data, mutate, isLoading } = useSWR("/api/leads", fetcher)
 
   const leads: Lead[] = data?.data || []
 
-  // Group leads by status for Kanban view
-  const leadsByStatus = {
-    NEW_LEAD: leads.filter((l) => l.status === "NEW_LEAD"),
-    CONTACTED: leads.filter((l) => l.status === "CONTACTED"),
-    NEGOTIATING: leads.filter((l) => l.status === "NEGOTIATING"),
-    CLOSED: leads.filter((l) => l.status === "CLOSED"),
+  // Calculate stats
+  const stats = {
+    total: leads.length,
+    newLeads: leads.filter((l) => l.status === "NEW_LEAD").length,
+    contacted: leads.filter((l) => l.status === "CONTACTED").length,
+    negotiating: leads.filter((l) => l.status === "NEGOTIATING").length,
+    closed: leads.filter((l) => l.status === "CLOSED").length,
   }
 
-  const handleEdit = (lead: Lead) => {
+  const conversionRate = stats.total > 0 ? ((stats.closed / stats.total) * 100).toFixed(1) : "0"
+
+  const handleLeadClick = (lead: Lead) => {
     setSelectedLead(lead)
     setDialogOpen(true)
   }
@@ -66,20 +50,26 @@ export default function CRMPage() {
   }
 
   const handleStatusChange = async (leadId: string, newStatus: LeadStatus) => {
-    await fetch(`/api/leads/${leadId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: newStatus }),
-    })
-    mutate()
+    try {
+      await fetch(`/api/leads/${leadId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      })
+      mutate()
+    } catch (error) {
+      console.error("Failed to update lead status:", error)
+    }
   }
 
   return (
-    <div className="p-6">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">CRM</h1>
-          <p className="text-muted-foreground">Manage your leads and customers</p>
+          <h1 className="text-3xl font-bold">CRM Pipeline</h1>
+          <p className="text-muted-foreground">
+            Manage your leads and track conversions
+          </p>
         </div>
         <Button onClick={handleAdd}>
           <Plus className="mr-2 h-4 w-4" />
@@ -87,63 +77,79 @@ export default function CRMPage() {
         </Button>
       </div>
 
-      {isLoading ? (
-        <div className="flex h-64 items-center justify-center">
-          <div className="text-muted-foreground">Loading leads...</div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-4 gap-4">
-          {(Object.keys(leadsByStatus) as LeadStatus[]).map((status) => (
-            <div key={status} className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold">{statusLabels[status]}</h3>
-                <Badge variant="outline">{leadsByStatus[status].length}</Badge>
-              </div>
-              <div className="space-y-3">
-                {leadsByStatus[status].map((lead) => (
-                  <Card
-                    key={lead.id}
-                    className="cursor-pointer transition-shadow hover:shadow-md"
-                    onClick={() => handleEdit(lead)}
-                  >
-                    <CardContent className="p-4">
-                      <div className="mb-2 flex items-center gap-2">
-                        <User className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">
-                          {lead.customer?.first_name} {lead.customer?.last_name}
-                        </span>
-                      </div>
-                      {lead.customer?.phone && (
-                        <div className="mb-1 flex items-center gap-2 text-sm text-muted-foreground">
-                          <Phone className="h-3 w-3" />
-                          {lead.customer.phone}
-                        </div>
-                      )}
-                      {lead.customer?.email && (
-                        <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                          <Mail className="h-3 w-3" />
-                          {lead.customer.email}
-                        </div>
-                      )}
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <Badge variant="outline" className="text-xs">
-                          {lead.source.replace("_", " ")}
-                        </Badge>
-                        <span>{formatDate(lead.created_at)}</span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-                {leadsByStatus[status].length === 0 && (
-                  <div className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-                    No leads
-                  </div>
-                )}
-              </div>
+      {/* Stats Cards */}
+      <div className="grid gap-4 md:grid-cols-5">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total Leads</CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.total}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">New Leads</CardTitle>
+            <UserPlus className="h-4 w-4 text-blue-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-blue-600">{stats.newLeads}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Contacted</CardTitle>
+            <Target className="h-4 w-4 text-yellow-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-yellow-600">{stats.contacted}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Negotiating</CardTitle>
+            <Target className="h-4 w-4 text-purple-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-purple-600">{stats.negotiating}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Conversion Rate</CardTitle>
+            <CheckCircle className="h-4 w-4 text-green-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600">{conversionRate}%</div>
+            <p className="text-xs text-muted-foreground">{stats.closed} closed</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Kanban Board */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle>Lead Pipeline</CardTitle>
+            <Badge variant="outline">Drag and drop to change status</Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex h-64 items-center justify-center">
+              <div className="text-muted-foreground">Loading leads...</div>
             </div>
-          ))}
-        </div>
-      )}
+          ) : (
+            <LeadKanban
+              leads={leads}
+              onLeadClick={handleLeadClick}
+              onStatusChange={handleStatusChange}
+              onAddLead={handleAdd}
+            />
+          )}
+        </CardContent>
+      </Card>
 
       <LeadDialog
         open={dialogOpen}

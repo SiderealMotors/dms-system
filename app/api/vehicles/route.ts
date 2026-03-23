@@ -7,14 +7,20 @@ export async function GET(request: NextRequest) {
   
   const status = searchParams.get("status")
   const search = searchParams.get("search")
-  const limit = parseInt(searchParams.get("limit") || "50")
+  const includeDeleted = searchParams.get("includeDeleted") === "true"
+  const limit = parseInt(searchParams.get("limit") || "100")
   const offset = parseInt(searchParams.get("offset") || "0")
 
   let query = supabase
     .from("vehicles")
-    .select("*", { count: "exact" })
+    .select("*, salesperson:users!vehicles_salesperson_id_fkey(id, name, email)", { count: "exact" })
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1)
+
+  // Exclude soft-deleted unless requested
+  if (!includeDeleted) {
+    query = query.is("deleted_at", null)
+  }
 
   if (status) {
     query = query.eq("status", status)
@@ -22,7 +28,7 @@ export async function GET(request: NextRequest) {
 
   if (search) {
     query = query.or(
-      `stock_number.ilike.%${search}%,vin.ilike.%${search}%,make.ilike.%${search}%,model.ilike.%${search}%`
+      `stock_number.ilike.%${search}%,vin.ilike.%${search}%,make.ilike.%${search}%,model.ilike.%${search}%,buyer_name.ilike.%${search}%`
     )
   }
 

@@ -23,16 +23,46 @@ export interface Vehicle {
   trim?: string
   exterior_color?: string
   interior_color?: string
+  colour?: string
   mileage: number
+  odometer?: number
   purchase_price: number
   asking_price?: number
+  selling_price?: number
   status: VehicleStatus
   date_acquired: string
   date_sold?: string
   notes?: string
   photos: string[]
+  // Cost fields
+  tax_rate?: number
+  safety_estimate?: number
+  safety_cost?: number
+  safety_charge?: number
+  warranty_cost?: number
+  warranty_charge?: number
+  floorplan_interest_cost?: number
+  gas?: number
+  omvic_fee?: number
+  referral_amount?: number
+  // Sale fields
+  buyer_name?: string
+  payment_method?: string
+  deposit_amount?: number
+  salesperson_id?: string
+  salesperson?: User
+  deleted_at?: string
   created_at: string
   updated_at: string
+}
+
+// Vehicle calculation helpers
+export interface VehicleCalculations {
+  totalCost: number
+  lotDays: number
+  grossProfit: number
+  netProfit: number
+  profitMargin: number
 }
 
 // Customer types
@@ -169,16 +199,33 @@ export interface JournalLineItem {
 export interface DashboardStats {
   totalVehicles: number
   availableVehicles: number
+  pendingVehicles: number
+  soldVehicles: number
   totalDeals: number
   closedDeals: number
   totalRevenue: number
   totalProfit: number
+  totalCost: number
   activeLeads: number
   conversionRate: number
+  avgDaysOnLot: number
+  avgProfitPerVehicle: number
 }
 
 export interface SalesTrend {
   month: string
   sales: number
   profit: number
+  count: number
+}
+
+export interface InventoryFinancials {
+  totalPurchaseCost: number
+  totalSafetyCost: number
+  totalWarrantyCost: number
+  totalFloorplanCost: number
+  totalGas: number
+  totalInvestment: number
+  potentialRevenue: number
+  potentialProfit: number
 }
