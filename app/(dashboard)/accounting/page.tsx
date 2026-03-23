@@ -87,7 +87,7 @@ export default function AccountingPage() {
   // Export functions
   const exportTrialBalance = () => {
     const headers = ["Account Code", "Account Name", "Debit", "Credit"]
-    const rows = accountBalances.map((a) => [
+    const rows = accountBalances.map((a: AccountBalance) => [
       a.code,
       a.name,
       a.balance > 0 && a.normalBalance === "DEBIT" ? a.balance.toFixed(2) : "",
