@@ -230,7 +230,7 @@ export default function AccountingPage() {
                 <CardTitle className="text-lg">Assets</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                {assetAccounts.filter((a: AccountBalance) => a.balance !== 0).map((account) => (
+                {assetAccounts.filter((a: AccountBalance) => a.balance !== 0).map((account: AccountBalance) => (
                   <div key={account.code} className="flex justify-between text-sm">
                     <span className="text-muted-foreground">{account.code} - {account.name}</span>
                     <span>{formatCurrency(account.balance)}</span>
@@ -248,7 +248,7 @@ export default function AccountingPage() {
                 <CardTitle className="text-lg">Liabilities</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                {liabilityAccounts.filter((a: AccountBalance) => a.balance !== 0).map((account) => (
+                {liabilityAccounts.filter((a: AccountBalance) => a.balance !== 0).map((account: AccountBalance) => (
                   <div key={account.code} className="flex justify-between text-sm">
                     <span className="text-muted-foreground">{account.code} - {account.name}</span>
                     <span>{formatCurrency(account.balance)}</span>
