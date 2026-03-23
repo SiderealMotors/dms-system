@@ -63,13 +63,13 @@ export default function DashboardPage() {
   const agedVehicles = availableVehicles.filter(v => calculateLotDays(v.date_acquired) > 60)
 
   // Lead pipeline data
-  const leadsByStage = {
-    NEW: leads.filter(l => l.stage === "NEW").length,
-    CONTACTED: leads.filter(l => l.stage === "CONTACTED").length,
-    QUALIFIED: leads.filter(l => l.stage === "QUALIFIED").length,
-    NEGOTIATING: leads.filter(l => l.stage === "NEGOTIATING").length,
+  const leadsByStatus = {
+    NEW_LEAD: leads.filter(l => l.status === "NEW_LEAD").length,
+    CONTACTED: leads.filter(l => l.status === "CONTACTED").length,
+    NEGOTIATING: leads.filter(l => l.status === "NEGOTIATING").length,
+    CLOSED: leads.filter(l => l.status === "CLOSED").length,
   }
-  const totalLeads = Object.values(leadsByStage).reduce((a, b) => a + b, 0)
+  const totalLeads = Object.values(leadsByStatus).reduce((a, b) => a + b, 0)
 
   // Deal stats
   const closedDeals = deals.filter(d => d.stage === "CLOSED_WON")
@@ -91,10 +91,10 @@ export default function DashboardPage() {
 
   // Lead pipeline chart data
   const pipelineData = [
-    { stage: "New", count: leadsByStage.NEW },
-    { stage: "Contacted", count: leadsByStage.CONTACTED },
-    { stage: "Qualified", count: leadsByStage.QUALIFIED },
-    { stage: "Negotiating", count: leadsByStage.NEGOTIATING },
+    { stage: "New", count: leadsByStatus.NEW_LEAD },
+    { stage: "Contacted", count: leadsByStatus.CONTACTED },
+    { stage: "Negotiating", count: leadsByStatus.NEGOTIATING },
+    { stage: "Closed", count: leadsByStatus.CLOSED },
   ]
 
   return (
@@ -174,7 +174,7 @@ export default function DashboardPage() {
           <CardContent>
             <div className="text-2xl font-bold">{totalLeads}</div>
             <p className="text-xs text-muted-foreground">
-              {leadsByStage.NEGOTIATING} in negotiation
+              {leadsByStatus.NEGOTIATING} in negotiation
             </p>
           </CardContent>
         </Card>
@@ -408,19 +408,19 @@ export default function DashboardPage() {
           <CardContent className="space-y-3">
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">New Leads</span>
-              <Badge variant="outline">{leadsByStage.NEW}</Badge>
+              <Badge variant="outline">{leadsByStatus.NEW_LEAD}</Badge>
             </div>
             <div className="flex justify-between">
               <span className="text-sm text-muted-foreground">Contacted</span>
-              <Badge variant="outline">{leadsByStage.CONTACTED}</Badge>
+              <Badge variant="outline">{leadsByStatus.CONTACTED}</Badge>
             </div>
             <div className="flex justify-between">
-              <span className="text-sm text-muted-foreground">Qualified</span>
-              <Badge variant="outline">{leadsByStage.QUALIFIED}</Badge>
+              <span className="text-sm text-muted-foreground">Negotiating</span>
+              <Badge variant="outline">{leadsByStatus.NEGOTIATING}</Badge>
             </div>
             <div className="flex justify-between border-t pt-2">
-              <span className="text-sm text-muted-foreground">Negotiating</span>
-              <Badge variant="success">{leadsByStage.NEGOTIATING}</Badge>
+              <span className="text-sm text-muted-foreground">Closed</span>
+              <Badge variant="success">{leadsByStatus.CLOSED}</Badge>
             </div>
           </CardContent>
         </Card>
