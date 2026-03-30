@@ -81,7 +81,7 @@ export function BillDialog({ open, onOpenChange, vendors, onSuccess }: BillDialo
     setForm(prev => ({
       ...prev,
       bill_type: value,
-      is_taxable: billType?.is_taxable ?? true,
+      is_taxable: billType?.taxable ?? true,
       description: billType?.label || "",
     }))
   }
