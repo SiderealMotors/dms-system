@@ -1,20 +1,5 @@
 import { createClient } from "@/lib/supabase/server"
-import { NextRequest, NextResponse } from "next/server"
-
-interface LineItem {
-  debit: number | null
-  credit: number | null
-  account: {
-    id: string
-    code: string
-    name: string
-    account_type: string
-    normal_balance: string
-  } | null
-  journal_entry: {
-    status: string
-  }
-}
+import { NextResponse } from "next/server"
 
 interface AccountBalance {
   code: string
@@ -26,7 +11,7 @@ interface AccountBalance {
   balance: number
 }
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   const supabase = await createClient()
 
   // Get all account balances from posted journal entries
@@ -44,15 +29,19 @@ export async function GET(request: NextRequest) {
   const accountBalances: Record<string, AccountBalance> = {}
 
   if (lineItems) {
-    for (const item of lineItems as LineItem[]) {
-      if (!item.account) continue
-      const accountId = item.account.id
+    for (const item of lineItems) {
+      // Supabase returns joined single records as objects, not arrays
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const account = item.account as any
+      if (!account) continue
+      
+      const accountId = account.id as string
       if (!accountBalances[accountId]) {
         accountBalances[accountId] = {
-          code: item.account.code,
-          name: item.account.name,
-          type: item.account.account_type,
-          normalBalance: item.account.normal_balance,
+          code: account.code as string,
+          name: account.name as string,
+          type: account.account_type as string,
+          normalBalance: account.normal_balance as string,
           debits: 0,
           credits: 0,
           balance: 0,
