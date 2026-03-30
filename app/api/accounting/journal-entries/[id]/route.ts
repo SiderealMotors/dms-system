@@ -110,31 +110,29 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // Check if this journal entry is linked to any AP/AR records
-  const { data: apLinks } = await supabase
+  // Delete any linked AP records (cascade delete)
+  await supabase
     .from("accounts_payable")
-    .select("id")
+    .delete()
     .eq("journal_entry_id", id)
 
-  const { data: arLinks } = await supabase
+  // Also delete AP records linked via payment journal entry
+  await supabase
+    .from("accounts_payable")
+    .delete()
+    .eq("payment_journal_entry_id", id)
+
+  // Delete any linked AR records (cascade delete)
+  await supabase
     .from("accounts_receivable")
-    .select("id")
+    .delete()
     .eq("journal_entry_id", id)
 
-  // Unlink from AP/AR if linked
-  if (apLinks && apLinks.length > 0) {
-    await supabase
-      .from("accounts_payable")
-      .update({ journal_entry_id: null })
-      .eq("journal_entry_id", id)
-  }
-
-  if (arLinks && arLinks.length > 0) {
-    await supabase
-      .from("accounts_receivable")
-      .update({ journal_entry_id: null })
-      .eq("journal_entry_id", id)
-  }
+  // Also delete AR records linked via payment journal entry
+  await supabase
+    .from("accounts_receivable")
+    .delete()
+    .eq("payment_journal_entry_id", id)
 
   // Delete line items first (due to foreign key constraint)
   const { error: lineItemsError } = await supabase

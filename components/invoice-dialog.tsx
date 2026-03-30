@@ -48,6 +48,7 @@ export function InvoiceDialog({ open, onOpenChange, onSuccess }: InvoiceDialogPr
     due_date: "",
     description: "",
     subtotal: 0,
+    taxable_amount: undefined as number | undefined, // For vehicle sales with non-taxable items
     is_taxable: true,
     create_journal_entry: true,
     mark_as_paid: false, // If true, skip AR and record as direct cash receipt
@@ -55,29 +56,41 @@ export function InvoiceDialog({ open, onOpenChange, onSuccess }: InvoiceDialogPr
 
   // Calculate tax and total
   const calculations = useMemo(() => {
-    const taxAmount = form.is_taxable ? form.subtotal * TAX_RATE : 0
+    // If we have a taxable_amount (from vehicle), use that for HST calculation
+    // Otherwise use the full subtotal
+    const taxableBase = form.taxable_amount !== undefined ? form.taxable_amount : form.subtotal
+    const taxAmount = form.is_taxable ? taxableBase * TAX_RATE : 0
     const totalAmount = form.subtotal + taxAmount
-    return { taxAmount, totalAmount }
-  }, [form.subtotal, form.is_taxable])
+    return { taxAmount, totalAmount, taxableBase }
+  }, [form.subtotal, form.taxable_amount, form.is_taxable])
 
   // Auto-populate from vehicle selection
   const handleVehicleChange = (vehicleId: string) => {
     const vehicle = vehicles.find(v => v.id === vehicleId)
     if (vehicle) {
-      const sellingPrice = vehicle.selling_price || 0
-      const safetyCharge = vehicle.safety_charge || 0
-      const warrantyCharge = vehicle.warranty_charge || 0
-      const omvicFee = vehicle.omvic_fee || 0
-      const subtotal = sellingPrice + safetyCharge + warrantyCharge + omvicFee
+      // Taxable items
+      const sellingPrice = Number(vehicle.selling_price) || 0
+      const safetyCharge = Number(vehicle.safety_charge) || 0
+      const warrantyCharge = Number(vehicle.warranty_charge) || 0
+      const omvicFee = Number(vehicle.omvic_fee) || 0
+      const taxableSubtotal = sellingPrice + safetyCharge + warrantyCharge + omvicFee
+      
+      // Non-taxable items
+      const registrationFee = Number(vehicle.registration_fee) || 0
+      
+      // Total subtotal (pre-tax amount for display)
+      const subtotal = taxableSubtotal + registrationFee
 
       setForm(prev => ({
         ...prev,
         vehicle_id: vehicleId,
         description: `Vehicle Sale: ${vehicle.year} ${vehicle.make} ${vehicle.model} (Stock #${vehicle.stock_number})`,
         subtotal,
+        // Store taxable portion for correct HST calculation
+        taxable_amount: taxableSubtotal,
       }))
     } else {
-      setForm(prev => ({ ...prev, vehicle_id: vehicleId }))
+      setForm(prev => ({ ...prev, vehicle_id: vehicleId, taxable_amount: undefined }))
     }
   }
 
@@ -113,6 +126,7 @@ export function InvoiceDialog({ open, onOpenChange, onSuccess }: InvoiceDialogPr
         due_date: "",
         description: "",
         subtotal: 0,
+        taxable_amount: undefined,
         is_taxable: true,
         create_journal_entry: true,
         mark_as_paid: false,

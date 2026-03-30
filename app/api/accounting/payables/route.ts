@@ -76,11 +76,11 @@ export async function POST(request: NextRequest) {
     const { data: accounts } = await supabase
       .from("gl_accounts")
       .select("id, code")
-      .in("code", ["1000", "1200", "2200", "5100"]) // Cash, Inventory, HST Payable, Safety/Expense
+      .in("code", ["1000", "1200", "1150", "5100"]) // Cash, Inventory, HST Receivable, Safety/Expense
 
     const cashAccount = accounts?.find(a => a.code === "1000")
     const inventoryAccount = accounts?.find(a => a.code === "1200")
-    const hstAccount = accounts?.find(a => a.code === "2200")
+    const hstReceivableAccount = accounts?.find(a => a.code === "1150") // Sales Tax Receivable (Input Tax Credits)
     const expenseAccount = accounts?.find(a => a.code === "5100") || inventoryAccount
 
     if (cashAccount && expenseAccount) {
@@ -115,10 +115,10 @@ export async function POST(request: NextRequest) {
         ]
 
         // Add HST line if applicable (debit HST receivable for input tax credit)
-        if (billData.tax_amount > 0 && hstAccount) {
+        if (billData.tax_amount > 0 && hstReceivableAccount) {
           lineItems.push({
             journal_entry_id: journalEntry.id,
-            account_id: hstAccount.id,
+            account_id: hstReceivableAccount.id,
             debit: billData.tax_amount,
             credit: 0,
             memo: "HST on purchase (input tax credit)",
@@ -178,11 +178,11 @@ export async function POST(request: NextRequest) {
     const { data: accounts } = await supabase
       .from("gl_accounts")
       .select("id, code")
-      .in("code", ["2000", "1200", "2200"]) // AP, Inventory, HST Payable
+      .in("code", ["2000", "1200", "1150"]) // AP, Inventory, HST Receivable
 
     const apAccount = accounts?.find(a => a.code === "2000")
     const inventoryAccount = accounts?.find(a => a.code === "1200")
-    const hstAccount = accounts?.find(a => a.code === "2200")
+    const hstReceivableAccount = accounts?.find(a => a.code === "1150") // Sales Tax Receivable (Input Tax Credits)
 
     if (apAccount && inventoryAccount) {
       // Create journal entry
@@ -211,14 +211,14 @@ export async function POST(request: NextRequest) {
           },
         ]
 
-        // Add HST line if applicable
-        if (bill.tax_amount > 0 && hstAccount) {
+        // Add HST line if applicable - debit Sales Tax Receivable for input tax credits
+        if (bill.tax_amount > 0 && hstReceivableAccount) {
           lineItems.push({
             journal_entry_id: journalEntry.id,
-            account_id: hstAccount.id,
+            account_id: hstReceivableAccount.id,
             debit: bill.tax_amount,
             credit: 0,
-            memo: "HST on purchase",
+            memo: "HST on purchase (input tax credit)",
           })
         }
 
