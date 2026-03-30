@@ -54,6 +54,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "User not found" }, { status: 404 })
   }
 
+  const { createJournalEntry, markAsPaid, ...invoiceData } = body
+
   // Generate invoice number
   const { data: lastInvoice } = await supabase
     .from("accounts_receivable")
@@ -65,12 +67,98 @@ export async function POST(request: NextRequest) {
   const nextNum = lastInvoice 
     ? parseInt(lastInvoice.invoice_number.replace("INV-", "")) + 1 
     : 1
-  const invoiceNumber = body.invoice_number || `INV-${String(nextNum).padStart(5, "0")}`
-
-  const { createJournalEntry, ...invoiceData } = body
+  const invoiceNumber = invoiceData.invoice_number || `INV-${String(nextNum).padStart(5, "0")}`
   invoiceData.invoice_number = invoiceNumber
 
-  // Create the invoice
+  // If marked as paid, skip AR and record as direct cash receipt
+  if (markAsPaid) {
+    // Generate entry number
+    const { data: lastEntry } = await supabase
+      .from("journal_entries")
+      .select("entry_number")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single()
+
+    const nextJENum = lastEntry 
+      ? parseInt(lastEntry.entry_number.replace("JE-", "")) + 1 
+      : 1
+    const entryNumber = `JE-${String(nextJENum).padStart(5, "0")}`
+
+    // Get GL account IDs for direct cash receipt
+    const { data: accounts } = await supabase
+      .from("gl_accounts")
+      .select("id, code")
+      .in("code", ["1000", "4000", "2200"]) // Cash, Sales Revenue, HST Payable
+
+    const cashAccount = accounts?.find(a => a.code === "1000")
+    const revenueAccount = accounts?.find(a => a.code === "4000")
+    const hstAccount = accounts?.find(a => a.code === "2200")
+
+    if (cashAccount && revenueAccount) {
+      // Create journal entry directly (no AR involved)
+      const { data: journalEntry, error: jeError } = await supabase
+        .from("journal_entries")
+        .insert({
+          entry_number: entryNumber,
+          entry_date: invoiceData.invoice_date,
+          description: `Paid Sale: ${invoiceData.description}`,
+          status: "POSTED",
+          posted_at: new Date().toISOString(),
+          created_by: dbUser.id,
+        })
+        .select()
+        .single()
+
+      if (jeError) {
+        return NextResponse.json({ error: jeError.message }, { status: 500 })
+      }
+
+      if (journalEntry) {
+        // Create line items - Debit cash, Credit revenue and HST
+        const lineItems = [
+          {
+            journal_entry_id: journalEntry.id,
+            account_id: cashAccount.id,
+            debit: invoiceData.total_amount,
+            credit: 0,
+            memo: "Cash received",
+          },
+          {
+            journal_entry_id: journalEntry.id,
+            account_id: revenueAccount.id,
+            debit: 0,
+            credit: invoiceData.subtotal,
+            memo: invoiceData.description,
+          },
+        ]
+
+        // Add HST line if applicable
+        if (invoiceData.tax_amount > 0 && hstAccount) {
+          lineItems.push({
+            journal_entry_id: journalEntry.id,
+            account_id: hstAccount.id,
+            debit: 0,
+            credit: invoiceData.tax_amount,
+            memo: "HST collected",
+          })
+        }
+
+        await supabase.from("journal_line_items").insert(lineItems)
+
+        return NextResponse.json({ 
+          data: { 
+            journalEntry,
+            message: "Sale recorded directly (paid, no AR created)" 
+          } 
+        })
+      }
+    }
+
+    return NextResponse.json({ error: "Failed to create direct sale entry" }, { status: 500 })
+  }
+
+  // Standard flow: Create the invoice in AR
   const { data: invoice, error: invError } = await supabase
     .from("accounts_receivable")
     .insert(invoiceData)

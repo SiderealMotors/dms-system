@@ -26,6 +26,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Wallet,
+  Pencil,
 } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
 import type { GLAccount, JournalEntry, AccountsPayable, AccountsReceivable, Vendor } from "@/lib/types"
@@ -54,6 +55,7 @@ export default function AccountingPage() {
   const [isBillDialogOpen, setIsBillDialogOpen] = useState(false)
   const [isInvoiceDialogOpen, setIsInvoiceDialogOpen] = useState(false)
   const [paymentTarget, setPaymentTarget] = useState<{ type: "payable" | "receivable", item: AccountsPayable | AccountsReceivable } | null>(null)
+  const [editingEntry, setEditingEntry] = useState<JournalEntry | null>(null)
 
   const refreshAll = () => {
     mutateSummary()
@@ -350,6 +352,7 @@ export default function AccountingPage() {
                     <TableHead>Accounts</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -369,6 +372,18 @@ export default function AccountingPage() {
                           <Badge variant={entry.status === "POSTED" ? "success" : "secondary"}>
                             {entry.status}
                           </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={() => {
+                              setEditingEntry(entry)
+                              setIsJournalDialogOpen(true)
+                            }}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
                         </TableCell>
                       </TableRow>
                     )
@@ -643,8 +658,12 @@ export default function AccountingPage() {
       {/* Dialogs */}
       <JournalEntryDialog
         open={isJournalDialogOpen}
-        onOpenChange={setIsJournalDialogOpen}
+        onOpenChange={(open) => {
+          setIsJournalDialogOpen(open)
+          if (!open) setEditingEntry(null)
+        }}
         onSuccess={refreshAll}
+        entry={editingEntry}
       />
 
       <BillDialog

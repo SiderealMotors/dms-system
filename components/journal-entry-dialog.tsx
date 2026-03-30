@@ -89,6 +89,39 @@ export function JournalEntryDialog({ open, onOpenChange, onSuccess, entry, vehic
   const vehicle: Vehicle | null = vehiclesData?.data || null
   const soldVehicles: Vehicle[] = soldVehiclesData?.data || []
 
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  // Populate form when editing an existing entry
+  useEffect(() => {
+    if (entry && open) {
+      setDescription(entry.description || "")
+      setEntryDate(entry.entry_date?.split("T")[0] || new Date().toISOString().split("T")[0])
+      setSelectedTemplate("custom")
+      
+      // Convert entry line items to our format
+      if (entry.line_items && entry.line_items.length > 0) {
+        const convertedLines: LineItem[] = entry.line_items.map((li) => ({
+          id: li.id || crypto.randomUUID(),
+          account_id: li.account_id || "",
+          debit: Number(li.debit) || 0,
+          credit: Number(li.credit) || 0,
+          memo: li.memo || "",
+        }))
+        setLineItems(convertedLines)
+      }
+    } else if (!open) {
+      // Reset form when dialog closes
+      setDescription("")
+      setEntryDate(new Date().toISOString().split("T")[0])
+      setSelectedTemplate("custom")
+      setLineItems([
+        { id: crypto.randomUUID(), account_id: "", debit: 0, credit: 0, memo: "" },
+        { id: crypto.randomUUID(), account_id: "", debit: 0, credit: 0, memo: "" },
+      ])
+      setError("")
+    }
+  }, [entry, open])
+
   // Group accounts by type for easier selection
   const groupedAccounts = useMemo(() => {
     const groups: Record<string, GLAccount[]> = {
@@ -375,8 +408,12 @@ export function JournalEntryDialog({ open, onOpenChange, onSuccess, entry, vehic
         })),
       }
 
-      const res = await fetch("/api/accounting/journal-entries", {
-        method: "POST",
+      const url = entry 
+        ? `/api/accounting/journal-entries/${entry.id}` 
+        : "/api/accounting/journal-entries"
+      
+      const res = await fetch(url, {
+        method: entry ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       })
@@ -392,6 +429,33 @@ export function JournalEntryDialog({ open, onOpenChange, onSuccess, entry, vehic
       setError(err instanceof Error ? err.message : "Failed to save")
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!entry) return
+    
+    if (!confirm("Are you sure you want to delete this journal entry? This action cannot be undone.")) {
+      return
+    }
+
+    setIsDeleting(true)
+    try {
+      const res = await fetch(`/api/accounting/journal-entries/${entry.id}`, {
+        method: "DELETE",
+      })
+
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || "Failed to delete journal entry")
+      }
+
+      onOpenChange(false)
+      onSuccess?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete")
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -584,14 +648,29 @@ export function JournalEntryDialog({ open, onOpenChange, onSuccess, entry, vehic
             </div>
           )}
 
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving || !totals.isBalanced}>
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {entry ? "Save Changes" : "Post Journal Entry"}
-            </Button>
+          <div className="flex justify-between">
+            {entry ? (
+              <Button 
+                type="button" 
+                variant="destructive" 
+                onClick={handleDelete}
+                disabled={isDeleting}
+              >
+                {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Delete Entry
+              </Button>
+            ) : (
+              <div></div>
+            )}
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={saving || !totals.isBalanced}>
+                {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {entry ? "Save Changes" : "Post Journal Entry"}
+              </Button>
+            </div>
           </div>
         </form>
       </DialogContent>

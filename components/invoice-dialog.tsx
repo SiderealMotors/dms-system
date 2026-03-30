@@ -50,6 +50,7 @@ export function InvoiceDialog({ open, onOpenChange, onSuccess }: InvoiceDialogPr
     subtotal: 0,
     is_taxable: true,
     create_journal_entry: true,
+    mark_as_paid: false, // If true, skip AR and record as direct cash receipt
   })
 
   // Calculate tax and total
@@ -98,6 +99,7 @@ export function InvoiceDialog({ open, onOpenChange, onSuccess }: InvoiceDialogPr
           tax_amount: calculations.taxAmount,
           total_amount: calculations.totalAmount,
           createJournalEntry: form.create_journal_entry,
+          markAsPaid: form.mark_as_paid,
         }),
       })
 
@@ -113,6 +115,7 @@ export function InvoiceDialog({ open, onOpenChange, onSuccess }: InvoiceDialogPr
         subtotal: 0,
         is_taxable: true,
         create_journal_entry: true,
+        mark_as_paid: false,
       })
 
       onOpenChange(false)
@@ -241,6 +244,18 @@ export function InvoiceDialog({ open, onOpenChange, onSuccess }: InvoiceDialogPr
               <span>Total:</span>
               <span>{formatCurrency(calculations.totalAmount)}</span>
             </div>
+          </div>
+
+          {/* Mark as Paid */}
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="mark_as_paid"
+              checked={form.mark_as_paid}
+              onCheckedChange={(checked) => setForm(prev => ({ ...prev, mark_as_paid: !!checked }))}
+            />
+            <Label htmlFor="mark_as_paid" className="text-sm font-normal">
+              Already paid (skip Accounts Receivable, record as direct cash receipt)
+            </Label>
           </div>
 
           {/* Auto Journal Entry */}
