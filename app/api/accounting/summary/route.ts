@@ -43,32 +43,34 @@ export async function GET(request: NextRequest) {
   // Calculate account balances
   const accountBalances: Record<string, AccountBalance> = {}
 
-  (lineItems as LineItem[] | null)?.forEach((item) => {
-    if (!item.account) return
-    const accountId = item.account.id
-    if (!accountBalances[accountId]) {
-      accountBalances[accountId] = {
-        code: item.account.code,
-        name: item.account.name,
-        type: item.account.account_type,
-        normalBalance: item.account.normal_balance,
-        debits: 0,
-        credits: 0,
-        balance: 0,
+  if (lineItems) {
+    for (const item of lineItems as LineItem[]) {
+      if (!item.account) continue
+      const accountId = item.account.id
+      if (!accountBalances[accountId]) {
+        accountBalances[accountId] = {
+          code: item.account.code,
+          name: item.account.name,
+          type: item.account.account_type,
+          normalBalance: item.account.normal_balance,
+          debits: 0,
+          credits: 0,
+          balance: 0,
+        }
       }
+      accountBalances[accountId].debits += Number(item.debit) || 0
+      accountBalances[accountId].credits += Number(item.credit) || 0
     }
-    accountBalances[accountId].debits += Number(item.debit) || 0
-    accountBalances[accountId].credits += Number(item.credit) || 0
-  })
+  }
 
   // Calculate final balances based on normal balance
-  Object.values(accountBalances).forEach(account => {
+  for (const account of Object.values(accountBalances)) {
     if (account.normalBalance === "DEBIT") {
       account.balance = account.debits - account.credits
     } else {
       account.balance = account.credits - account.debits
     }
-  })
+  }
 
   // Get AP/AR summaries
   const { data: apData } = await supabase
@@ -79,45 +81,60 @@ export async function GET(request: NextRequest) {
     .from("accounts_receivable")
     .select("total_amount, amount_paid, status")
 
-  // Calculate totals
+  // Calculate AP totals
+  let apTotal = 0
+  let apPaid = 0
+  let apUnpaidCount = 0
+  if (apData) {
+    for (const ap of apData) {
+      apTotal += Number(ap.total_amount) || 0
+      apPaid += Number(ap.amount_paid) || 0
+      if (ap.status !== "PAID") apUnpaidCount++
+    }
+  }
   const apSummary = {
-    total: apData?.reduce((sum, ap) => sum + Number(ap.total_amount), 0) || 0,
-    paid: apData?.reduce((sum, ap) => sum + Number(ap.amount_paid), 0) || 0,
-    outstanding: 0,
-    unpaidCount: apData?.filter(ap => ap.status !== "PAID").length || 0,
+    total: apTotal,
+    paid: apPaid,
+    outstanding: apTotal - apPaid,
+    unpaidCount: apUnpaidCount,
   }
-  apSummary.outstanding = apSummary.total - apSummary.paid
 
-  const arSummary = {
-    total: arData?.reduce((sum, ar) => sum + Number(ar.total_amount), 0) || 0,
-    collected: arData?.reduce((sum, ar) => sum + Number(ar.amount_paid), 0) || 0,
-    outstanding: 0,
-    unpaidCount: arData?.filter(ar => ar.status !== "PAID").length || 0,
+  // Calculate AR totals
+  let arTotal = 0
+  let arCollected = 0
+  let arUnpaidCount = 0
+  if (arData) {
+    for (const ar of arData) {
+      arTotal += Number(ar.total_amount) || 0
+      arCollected += Number(ar.amount_paid) || 0
+      if (ar.status !== "PAID") arUnpaidCount++
+    }
   }
-  arSummary.outstanding = arSummary.total - arSummary.collected
+  const arSummary = {
+    total: arTotal,
+    collected: arCollected,
+    outstanding: arTotal - arCollected,
+    unpaidCount: arUnpaidCount,
+  }
 
   // Calculate financial summaries
   const accounts = Object.values(accountBalances)
   
-  const totalAssets = accounts
-    .filter(a => a.type === "ASSET")
-    .reduce((sum, a) => sum + a.balance, 0)
+  let totalAssets = 0
+  let totalLiabilities = 0
+  let totalEquity = 0
+  let totalRevenue = 0
+  let totalExpenses = 0
+  let cashBalance = 0
 
-  const totalLiabilities = accounts
-    .filter(a => a.type === "LIABILITY")
-    .reduce((sum, a) => sum + a.balance, 0)
-
-  const totalEquity = accounts
-    .filter(a => a.type === "EQUITY")
-    .reduce((sum, a) => sum + a.balance, 0)
-
-  const totalRevenue = accounts
-    .filter(a => a.type === "REVENUE")
-    .reduce((sum, a) => sum + a.balance, 0)
-
-  const totalExpenses = accounts
-    .filter(a => a.type === "EXPENSE")
-    .reduce((sum, a) => sum + a.balance, 0)
+  for (const a of accounts) {
+    if (a.type === "ASSET") totalAssets += a.balance
+    if (a.type === "LIABILITY") totalLiabilities += a.balance
+    if (a.type === "EQUITY") totalEquity += a.balance
+    if (a.type === "REVENUE") totalRevenue += a.balance
+    if (a.type === "EXPENSE") totalExpenses += a.balance
+    if (a.code === "1000") cashBalance = a.balance
+  }
 
   const netIncome = totalRevenue - totalExpenses
 
@@ -137,10 +154,6 @@ export async function GET(request: NextRequest) {
     .order("entry_date", { ascending: false })
     .limit(10)
 
-  // Get cash balance
-  const cashAccount = accounts.find(a => a.code === "1000")
-  const cashBalance = cashAccount?.balance || 0
-
   return NextResponse.json({
     accountBalances: accounts,
     apSummary,
@@ -154,6 +167,6 @@ export async function GET(request: NextRequest) {
       netIncome,
       cashBalance,
     },
-    recentEntries,
+    recentEntries: recentEntries || [],
   })
 }
