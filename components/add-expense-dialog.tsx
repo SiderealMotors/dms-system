@@ -208,15 +208,15 @@ export function AddExpenseDialog({
           <div className="space-y-2">
             <Label htmlFor="vendor">Vendor (Optional)</Label>
             <Select
-              value={form.vendor_id}
-              onValueChange={(value) => setForm(prev => ({ ...prev, vendor_id: value }))}
+              value={form.vendor_id || "none"}
+              onValueChange={(value) => setForm(prev => ({ ...prev, vendor_id: value === "none" ? "" : value }))}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select vendor" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">No vendor</SelectItem>
-                {vendors.map((vendor) => (
+                <SelectItem value="none">No vendor</SelectItem>
+                {vendors.filter(v => v.id).map((vendor) => (
                   <SelectItem key={vendor.id} value={vendor.id}>
                     {vendor.name}
                   </SelectItem>
