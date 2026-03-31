@@ -73,6 +73,7 @@ const initialFormState = {
   gas: 0,
   warranty_cost: 0,
   floorplan_interest_cost: 0,
+  floorplan_fees: 0,
   // Sale fields (Sale Info section)
   selling_price: 0,
   safety_charge: 0,
@@ -130,6 +131,7 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
         gas: vehicle.gas || 0,
         warranty_cost: vehicle.warranty_cost || 0,
         floorplan_interest_cost: vehicle.floorplan_interest_cost || 0,
+        floorplan_fees: vehicle.floorplan_fees || 0,
         selling_price: vehicle.selling_price || 0,
         safety_charge: vehicle.safety_charge || 0,
         warranty_charge: vehicle.warranty_charge || 0,
@@ -172,11 +174,17 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
     const warrantyCostTax = form.warranty_cost * TAX_RATE
     const totalWarrantyCost = form.warranty_cost + warrantyCostTax
     
-    // Floorplan (no tax - it's interest/fees)
-    const totalFloorplanCost = form.floorplan_interest_cost
+    // Floorplan Interest (no tax - it's interest)
+    const totalFloorplanInterest = form.floorplan_interest_cost
+    
+    // Floorplan Fees (no tax - it's fees)
+    const totalFloorplanFees = form.floorplan_fees
+    
+    // Combined floorplan total
+    const totalFloorplanCost = totalFloorplanInterest + totalFloorplanFees
     
     // Pre-tax cost total (for profit calculation - excludes taxes we paid)
-    const preTaxCost = form.purchase_price + form.miscellaneous_cost + form.safety_cost + form.gas + form.warranty_cost + form.floorplan_interest_cost
+    const preTaxCost = form.purchase_price + form.miscellaneous_cost + form.safety_cost + form.gas + form.warranty_cost + form.floorplan_interest_cost + form.floorplan_fees
     
     // Total All-In Cost including taxes (what we actually paid out)
     const totalCostWithTax = totalPurchasePrice + totalMiscellaneousCost + totalSafetyCost + totalGasCost + totalWarrantyCost + totalFloorplanCost
@@ -232,6 +240,8 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
       totalGasCost,
       warrantyCostTax,
       totalWarrantyCost,
+      totalFloorplanInterest,
+      totalFloorplanFees,
       totalFloorplanCost,
       // Totals
       preTaxCost,
@@ -609,19 +619,36 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
                 </CardContent>
               </Card>
 
-              {/* Floorplan Interest + Fees */}
+              {/* Floorplan Interest */}
               <Card>
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-base">Floorplan Interest + Fees</CardTitle>
+                  <CardTitle className="text-base">Floorplan Interest</CardTitle>
                 </CardHeader>
                 <CardContent className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Floorplan Interest + Fees <span className="text-xs text-muted-foreground">(no tax)</span></Label>
+                    <Label>Floorplan Interest <span className="text-xs text-muted-foreground">(no tax)</span></Label>
                     <Input type="number" step="0.01" value={form.floorplan_interest_cost} onChange={(e) => setForm({ ...form, floorplan_interest_cost: parseFloat(e.target.value) || 0 })} />
                   </div>
                   <div className="space-y-2">
-                    <Label>Total Floorplan Cost</Label>
-                    <Input type="text" value={formatCurrency(calculations.totalFloorplanCost)} disabled className="bg-muted" />
+                    <Label>Total Interest</Label>
+                    <Input type="text" value={formatCurrency(calculations.totalFloorplanInterest)} disabled className="bg-muted" />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Floorplan Fees */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Floorplan Fees</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Floorplan Fees <span className="text-xs text-muted-foreground">(no tax)</span></Label>
+                    <Input type="number" step="0.01" value={form.floorplan_fees} onChange={(e) => setForm({ ...form, floorplan_fees: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Total Fees</Label>
+                    <Input type="text" value={formatCurrency(calculations.totalFloorplanFees)} disabled className="bg-muted" />
                   </div>
                 </CardContent>
               </Card>

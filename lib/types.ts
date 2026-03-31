@@ -42,6 +42,7 @@ export interface Vehicle {
   gas?: number
   warranty_cost?: number
   floorplan_interest_cost?: number
+  floorplan_fees?: number
   // Sale fields (Sale Info section)
   safety_charge?: number
   warranty_charge?: number

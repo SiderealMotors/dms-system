@@ -105,6 +105,7 @@ async function createVehiclePurchaseEntries(supabase: Awaited<ReturnType<typeof 
   // Non-taxable costs (interest/fees)
   const nonTaxableCosts = [
     { field: 'floorplan_interest_cost', amount: Number(vehicle.floorplan_interest_cost) || 0, memo: 'Floorplan Interest', account: interestExpenseAccount },
+    { field: 'floorplan_fees', amount: Number(vehicle.floorplan_fees) || 0, memo: 'Floorplan Fees', account: expenseAccount },
   ]
 
   // Calculate total taxable costs

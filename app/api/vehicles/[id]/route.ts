@@ -48,7 +48,7 @@ export async function PUT(
   }
 
   // Check if purchase & cost fields were updated
-  const costFields = ['purchase_price', 'miscellaneous_cost', 'safety_cost', 'gas', 'warranty_cost', 'floorplan_interest_cost']
+  const costFields = ['purchase_price', 'miscellaneous_cost', 'safety_cost', 'gas', 'warranty_cost', 'floorplan_interest_cost', 'floorplan_fees']
   const hasCostFieldUpdate = costFields.some(field => body[field] !== undefined)
 
   if (hasCostFieldUpdate) {
@@ -235,6 +235,7 @@ async function updateVehiclePurchaseEntries(
   // Non-taxable costs (interest/fees)
   const nonTaxableCosts = [
     { field: 'floorplan_interest_cost', amount: Number(vehicle.floorplan_interest_cost) || 0, memo: 'Floorplan Interest', account: interestExpenseAccount },
+    { field: 'floorplan_fees', amount: Number(vehicle.floorplan_fees) || 0, memo: 'Floorplan Fees', account: expenseAccount },
   ]
 
   // Calculate total taxable costs
