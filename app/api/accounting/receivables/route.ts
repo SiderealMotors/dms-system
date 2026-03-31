@@ -158,92 +158,100 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Failed to create direct sale entry" }, { status: 500 })
   }
 
-  // Standard flow: Create the invoice in AR
+  // Standard flow: Always create journal entry first, then link AR to it
+  // This ensures AR records are never orphaned without journal entries
+  
+  // Generate entry number
+  const { data: lastEntry } = await supabase
+    .from("journal_entries")
+    .select("entry_number")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single()
+
+  const nextJENum = lastEntry 
+    ? parseInt(lastEntry.entry_number.replace("JE-", "")) + 1 
+    : 1
+  const entryNumber = `JE-${String(nextJENum).padStart(5, "0")}`
+
+  // Get GL account IDs
+  const { data: accounts } = await supabase
+    .from("gl_accounts")
+    .select("id, code")
+    .in("code", ["1100", "4000", "2200"]) // AR, Sales Revenue, HST Payable
+
+  const arAccount = accounts?.find(a => a.code === "1100")
+  const revenueAccount = accounts?.find(a => a.code === "4000")
+  const hstAccount = accounts?.find(a => a.code === "2200")
+
+  if (!arAccount || !revenueAccount) {
+    return NextResponse.json({ error: "Required GL accounts not found" }, { status: 500 })
+  }
+
+  // Create journal entry first
+  const { data: journalEntry, error: jeError } = await supabase
+    .from("journal_entries")
+    .insert({
+      entry_number: entryNumber,
+      entry_date: invoiceData.invoice_date,
+      description: `Sale: ${invoiceData.description}`,
+      status: "POSTED",
+      posted_at: new Date().toISOString(),
+      created_by: dbUser.id,
+    })
+    .select()
+    .single()
+
+  if (jeError || !journalEntry) {
+    return NextResponse.json({ error: jeError?.message || "Failed to create journal entry" }, { status: 500 })
+  }
+
+  // Create line items
+  const lineItems = [
+    {
+      journal_entry_id: journalEntry.id,
+      account_id: arAccount.id,
+      debit: invoiceData.total_amount,
+      credit: 0,
+      memo: "Amount due from customer",
+    },
+    {
+      journal_entry_id: journalEntry.id,
+      account_id: revenueAccount.id,
+      debit: 0,
+      credit: invoiceData.subtotal,
+      memo: "Vehicle sale revenue",
+    },
+  ]
+
+  // Add HST line if applicable
+  if (invoiceData.tax_amount > 0 && hstAccount) {
+    lineItems.push({
+      journal_entry_id: journalEntry.id,
+      account_id: hstAccount.id,
+      debit: 0,
+      credit: invoiceData.tax_amount,
+      memo: "HST collected",
+    })
+  }
+
+  await supabase.from("journal_line_items").insert(lineItems)
+
+  // Now create the invoice in AR with the journal entry linked
   const { data: invoice, error: invError } = await supabase
     .from("accounts_receivable")
-    .insert(invoiceData)
+    .insert({
+      ...invoiceData,
+      journal_entry_id: journalEntry.id,
+    })
     .select()
     .single()
 
   if (invError) {
+    // Rollback: delete the journal entry if invoice creation fails
+    await supabase.from("journal_line_items").delete().eq("journal_entry_id", journalEntry.id)
+    await supabase.from("journal_entries").delete().eq("id", journalEntry.id)
     return NextResponse.json({ error: invError.message }, { status: 500 })
-  }
-
-  // If requested, create automated journal entry for the sale
-  if (createJournalEntry && invoice) {
-    // Generate entry number
-    const { data: lastEntry } = await supabase
-      .from("journal_entries")
-      .select("entry_number")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single()
-
-    const nextJENum = lastEntry 
-      ? parseInt(lastEntry.entry_number.replace("JE-", "")) + 1 
-      : 1
-    const entryNumber = `JE-${String(nextJENum).padStart(5, "0")}`
-
-    // Get GL account IDs
-    const { data: accounts } = await supabase
-      .from("gl_accounts")
-      .select("id, code")
-      .in("code", ["1100", "4000", "2200"]) // AR, Sales Revenue, HST Payable
-
-    const arAccount = accounts?.find(a => a.code === "1100")
-    const revenueAccount = accounts?.find(a => a.code === "4000")
-    const hstAccount = accounts?.find(a => a.code === "2200")
-
-    if (arAccount && revenueAccount) {
-      const { data: journalEntry } = await supabase
-        .from("journal_entries")
-        .insert({
-          entry_number: entryNumber,
-          entry_date: invoice.invoice_date,
-          description: `Sale: ${invoice.description}`,
-          status: "POSTED",
-          posted_at: new Date().toISOString(),
-          created_by: dbUser.id,
-        })
-        .select()
-        .single()
-
-      if (journalEntry) {
-        const lineItems = [
-          {
-            journal_entry_id: journalEntry.id,
-            account_id: arAccount.id,
-            debit: invoice.total_amount,
-            credit: 0,
-            memo: "Amount due from customer",
-          },
-          {
-            journal_entry_id: journalEntry.id,
-            account_id: revenueAccount.id,
-            debit: 0,
-            credit: invoice.subtotal,
-            memo: "Vehicle sale revenue",
-          },
-        ]
-
-        if (invoice.tax_amount > 0 && hstAccount) {
-          lineItems.push({
-            journal_entry_id: journalEntry.id,
-            account_id: hstAccount.id,
-            debit: 0,
-            credit: invoice.tax_amount,
-            memo: "HST collected",
-          })
-        }
-
-        await supabase.from("journal_line_items").insert(lineItems)
-
-        await supabase
-          .from("accounts_receivable")
-          .update({ journal_entry_id: journalEntry.id })
-          .eq("id", invoice.id)
-      }
-    }
   }
 
   return NextResponse.json({ data: invoice })

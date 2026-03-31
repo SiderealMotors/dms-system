@@ -61,14 +61,16 @@ export async function GET() {
     }
   }
 
-  // Get AP/AR summaries
+  // Get AP/AR summaries - only count records with valid journal entries
   const { data: apData } = await supabase
     .from("accounts_payable")
     .select("total_amount, amount_paid, status")
+    .not("journal_entry_id", "is", null)
 
   const { data: arData } = await supabase
     .from("accounts_receivable")
     .select("total_amount, amount_paid, status")
+    .not("journal_entry_id", "is", null)
 
   // Calculate AP totals
   let apTotal = 0
