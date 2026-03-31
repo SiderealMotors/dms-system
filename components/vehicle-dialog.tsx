@@ -21,9 +21,23 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Search, Car, DollarSign, TrendingUp, Calculator } from "lucide-react"
-import { formatCurrency, calculateLotDays } from "@/lib/utils"
+import { Loader2, Search, Car, DollarSign, TrendingUp, Calculator, Plus, Trash2 } from "lucide-react"
+import { formatCurrency, calculateLotDays, formatDate } from "@/lib/utils"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { AddExpenseDialog } from "@/components/add-expense-dialog"
 import type { Vehicle, VehicleStatus, User } from "@/lib/types"
+
+interface VehicleExpense {
+  id: string
+  expense_date: string
+  expense_type: string
+  description: string
+  notes: string | null
+  amount: number
+  tax_amount: number
+  total_amount: number
+  vendor?: { id: string; name: string } | null
+}
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
@@ -79,9 +93,19 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
   const [vinLoading, setVinLoading] = useState(false)
   const [vinError, setVinError] = useState("")
   const [activeTab, setActiveTab] = useState("basic")
+  const [isAddExpenseOpen, setIsAddExpenseOpen] = useState(false)
+  const [deletingExpenseId, setDeletingExpenseId] = useState<string | null>(null)
 
   const { data: usersData } = useSWR("/api/users?role=SALES", fetcher)
   const salesUsers: User[] = usersData?.data || []
+
+  // Fetch expenses for existing vehicles
+  const { data: expensesData, mutate: mutateExpenses } = useSWR<{ data: VehicleExpense[] }>(
+    vehicle?.id && open ? `/api/vehicles/${vehicle.id}/expenses` : null,
+    fetcher
+  )
+  const expenses = expensesData?.data || []
+  const totalExpenses = expenses.reduce((sum, e) => sum + e.total_amount, 0)
 
   useEffect(() => {
     if (vehicle) {
@@ -303,6 +327,19 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
     }
   }
 
+  const handleDeleteExpense = async (expenseId: string) => {
+    if (!vehicle || !confirm("Are you sure you want to delete this expense? The associated journal entry will also be deleted.")) return
+    setDeletingExpenseId(expenseId)
+    try {
+      await fetch(`/api/vehicles/${vehicle.id}/expenses/${expenseId}`, { method: "DELETE" })
+      mutateExpenses()
+    } catch (error) {
+      console.error("Error deleting expense:", error)
+    } finally {
+      setDeletingExpenseId(null)
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
@@ -368,9 +405,12 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
 
         <form onSubmit={handleSubmit}>
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-5">
               <TabsTrigger value="basic">Basic Info</TabsTrigger>
               <TabsTrigger value="purchase">Purchase & Costs</TabsTrigger>
+              <TabsTrigger value="expenses" disabled={!vehicle}>
+                Expenses {expenses.length > 0 && `(${expenses.length})`}
+              </TabsTrigger>
               <TabsTrigger value="sale">Sale Info</TabsTrigger>
               <TabsTrigger value="notes">Notes</TabsTrigger>
             </TabsList>
@@ -818,6 +858,98 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
               </Card>
             </TabsContent>
 
+            {/* EXPENSES TAB */}
+            <TabsContent value="expenses" className="space-y-4 mt-4">
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <DollarSign className="h-5 w-5" />
+                    Additional Expenses
+                  </CardTitle>
+                  <Button 
+                    type="button" 
+                    size="sm" 
+                    onClick={() => setIsAddExpenseOpen(true)}
+                    disabled={!vehicle}
+                  >
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add Expense
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {expenses.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <p>No additional expenses recorded.</p>
+                      <p className="text-sm mt-1">Click &quot;Add Expense&quot; to record repairs, parts, or other costs.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Date</TableHead>
+                            <TableHead>Type</TableHead>
+                            <TableHead>Description</TableHead>
+                            <TableHead>Vendor</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                            <TableHead className="text-right">HST</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
+                            <TableHead></TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {expenses.map((expense) => (
+                            <TableRow key={expense.id}>
+                              <TableCell>{formatDate(expense.expense_date)}</TableCell>
+                              <TableCell>
+                                <Badge variant="outline">{expense.expense_type}</Badge>
+                              </TableCell>
+                              <TableCell className="max-w-[200px]">
+                                <div className="truncate">{expense.description}</div>
+                                {expense.notes && (
+                                  <div className="text-xs text-muted-foreground truncate">{expense.notes}</div>
+                                )}
+                              </TableCell>
+                              <TableCell>{expense.vendor?.name || "-"}</TableCell>
+                              <TableCell className="text-right">{formatCurrency(expense.amount)}</TableCell>
+                              <TableCell className="text-right">{formatCurrency(expense.tax_amount)}</TableCell>
+                              <TableCell className="text-right font-medium">{formatCurrency(expense.total_amount)}</TableCell>
+                              <TableCell>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteExpense(expense.id)}
+                                  disabled={deletingExpenseId === expense.id}
+                                >
+                                  {deletingExpenseId === expense.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                  )}
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+
+                      {/* Totals Summary */}
+                      <div className="mt-4 p-3 bg-muted rounded-md">
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium">Total Additional Expenses:</span>
+                          <span className="text-lg font-bold">{formatCurrency(totalExpenses)}</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          These expenses are automatically recorded in the accounting system.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             {/* NOTES TAB */}
             <TabsContent value="notes" className="space-y-4 mt-4">
               <div className="space-y-2">
@@ -854,6 +986,22 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
           </div>
         </form>
       </DialogContent>
+
+      {/* Add Expense Dialog */}
+      {vehicle && (
+        <AddExpenseDialog
+          open={isAddExpenseOpen}
+          onOpenChange={setIsAddExpenseOpen}
+          vehicleId={vehicle.id}
+          vehicleInfo={{
+            year: vehicle.year,
+            make: vehicle.make,
+            model: vehicle.model,
+            stock_number: vehicle.stock_number,
+          }}
+          onSuccess={() => mutateExpenses()}
+        />
+      )}
     </Dialog>
   )
 }

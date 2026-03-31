@@ -211,6 +211,29 @@ export interface Vendor {
   updated_at: string
 }
 
+// Vehicle Expense types
+export type VehicleExpenseType = "REPAIR" | "PARTS" | "DETAILING" | "INSPECTION" | "TOWING" | "REGISTRATION" | "ADVERTISING" | "OTHER"
+
+export interface VehicleExpense {
+  id: string
+  vehicle_id: string
+  expense_date: string
+  expense_type: VehicleExpenseType
+  description: string
+  notes?: string
+  amount: number
+  tax_amount: number
+  total_amount: number
+  is_taxable: boolean
+  vendor_id?: string
+  journal_entry_id?: string
+  created_by?: string
+  created_at: string
+  updated_at: string
+  vendor?: Vendor
+  journal_entry?: JournalEntry
+}
+
 // Accounts Payable types
 export type APARStatus = "UNPAID" | "PARTIAL" | "PAID"
 
