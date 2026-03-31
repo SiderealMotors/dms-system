@@ -308,6 +308,12 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
         salesperson_id: form.salesperson_id || null,
         tax_rate: TAX_RATE,
       }
+      console.log("[v0] Submitting vehicle payload:", {
+        id: vehicle?.id,
+        purchase_price: payload.purchase_price,
+        floorplan_interest_cost: payload.floorplan_interest_cost,
+        floorplan_fees: payload.floorplan_fees,
+      })
       const url = vehicle ? `/api/vehicles/${vehicle.id}` : "/api/vehicles"
       const method = vehicle ? "PUT" : "POST"
       const res = await fetch(url, {

@@ -51,8 +51,14 @@ export async function PUT(
   const costFields = ['purchase_price', 'miscellaneous_cost', 'safety_cost', 'gas', 'warranty_cost', 'floorplan_interest_cost', 'floorplan_fees']
   const hasCostFieldUpdate = costFields.some(field => body[field] !== undefined)
 
+  console.log("[v0] PUT vehicle - body keys:", Object.keys(body))
+  console.log("[v0] PUT vehicle - hasCostFieldUpdate:", hasCostFieldUpdate)
+  console.log("[v0] PUT vehicle - costFields in body:", costFields.filter(f => body[f] !== undefined))
+
   if (hasCostFieldUpdate) {
+    console.log("[v0] Calling updateVehiclePurchaseEntries for vehicle:", data.id)
     await updateVehiclePurchaseEntries(supabase, data, currentVehicle)
+    console.log("[v0] Completed updateVehiclePurchaseEntries")
   }
 
   // If vehicle has sale-related fields updated, sync with linked AR/invoice
@@ -194,15 +200,24 @@ async function updateVehiclePurchaseEntries(
   vehicle: Record<string, unknown>,
   previousVehicle: Record<string, unknown> | null
 ) {
+  console.log("[v0] updateVehiclePurchaseEntries called")
+  console.log("[v0] Vehicle:", vehicle.id, vehicle.stock_number)
+  console.log("[v0] Vehicle costs - purchase_price:", vehicle.purchase_price, "floorplan_interest_cost:", vehicle.floorplan_interest_cost)
+  
   const TAX_RATE = 0.13
   
   // Get GL account IDs
-  const { data: accounts } = await supabase
+  const { data: accounts, error: accountsError } = await supabase
     .from("gl_accounts")
     .select("id, code")
     .in("code", ["1000", "1200", "1150", "5100", "5300"]) // Cash, Inventory, HST Receivable, Operating Exp, Interest Exp
 
-  if (!accounts || accounts.length === 0) return
+  console.log("[v0] GL accounts found:", accounts?.length, "error:", accountsError?.message)
+
+  if (!accounts || accounts.length === 0) {
+    console.log("[v0] No GL accounts found, returning early")
+    return
+  }
 
   const cashAccount = accounts.find(a => a.code === "1000")
   const inventoryAccount = accounts.find(a => a.code === "1200")
@@ -242,14 +257,19 @@ async function updateVehiclePurchaseEntries(
   const totalTaxableAmount = taxableCosts.reduce((sum, c) => sum + c.amount, 0)
   const totalNonTaxableAmount = nonTaxableCosts.reduce((sum, c) => sum + c.amount, 0)
   
+  console.log("[v0] totalTaxableAmount:", totalTaxableAmount, "totalNonTaxableAmount:", totalNonTaxableAmount)
+  
   if (totalTaxableAmount === 0 && totalNonTaxableAmount === 0) {
     // Clear the journal entry link since there are no costs
+    console.log("[v0] No costs - clearing journal entry link")
     await supabase.from("vehicles").update({ purchase_journal_entry_id: null }).eq("id", vehicle.id)
     return
   }
 
   const totalTax = totalTaxableAmount * TAX_RATE
   const grandTotal = totalTaxableAmount + totalTax + totalNonTaxableAmount
+  
+  console.log("[v0] Creating journal entry - totalTax:", totalTax, "grandTotal:", grandTotal)
 
   // Generate entry number
   const { data: lastEntry } = await supabase
@@ -278,7 +298,11 @@ async function updateVehiclePurchaseEntries(
     .select()
     .single()
 
-  if (jeError || !journalEntry) return
+  if (jeError || !journalEntry) {
+    console.log("[v0] Failed to create journal entry:", jeError?.message)
+    return
+  }
+  console.log("[v0] Created journal entry:", journalEntry.id, journalEntry.entry_number)
 
   // Create line items
   const lineItems: Array<{
