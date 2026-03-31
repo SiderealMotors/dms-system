@@ -57,6 +57,8 @@ export async function PUT(
 
   if (hasCostFieldUpdate) {
     console.log("[v0] Calling updateVehiclePurchaseEntries for vehicle:", data.id)
+    console.log("[v0] Current purchase_journal_entry_id on vehicle:", data.purchase_journal_entry_id)
+    console.log("[v0] Previous purchase_journal_entry_id:", currentVehicle?.purchase_journal_entry_id)
     await updateVehiclePurchaseEntries(supabase, data, currentVehicle)
     console.log("[v0] Completed updateVehiclePurchaseEntries")
   }
@@ -232,10 +234,20 @@ async function updateVehiclePurchaseEntries(
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user?.id).single()
 
   // If there's an existing purchase journal entry, delete it first
-  const existingJEId = vehicle.purchase_journal_entry_id as string | null
+  // We need to fetch the current JE ID from the database since the vehicle object may not have it
+  const { data: vehicleWithJE } = await supabase
+    .from("vehicles")
+    .select("purchase_journal_entry_id")
+    .eq("id", vehicle.id)
+    .single()
+  
+  const existingJEId = vehicleWithJE?.purchase_journal_entry_id as string | null
+  console.log("[v0] Checking for existing JE to delete:", existingJEId)
   if (existingJEId) {
-    await supabase.from("journal_line_items").delete().eq("journal_entry_id", existingJEId)
-    await supabase.from("journal_entries").delete().eq("id", existingJEId)
+    console.log("[v0] Deleting existing journal entry:", existingJEId)
+    const { error: deleteLineItemsError } = await supabase.from("journal_line_items").delete().eq("journal_entry_id", existingJEId)
+    const { error: deleteJEError } = await supabase.from("journal_entries").delete().eq("id", existingJEId)
+    console.log("[v0] Delete line items error:", deleteLineItemsError?.message, "Delete JE error:", deleteJEError?.message)
   }
 
   // Cost items that need journal entries (taxable costs)
