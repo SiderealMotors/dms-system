@@ -77,7 +77,7 @@ async function createVehiclePurchaseEntries(supabase: Awaited<ReturnType<typeof 
   const { data: accounts } = await supabase
     .from("gl_accounts")
     .select("id, code")
-    .in("code", ["1000", "1200", "1150", "5100", "5200"]) // Cash, Inventory, HST Receivable, Operating Expenses, Interest Expense
+    .in("code", ["1000", "1200", "1150", "5100", "5300"]) // Cash, Inventory, HST Receivable, Operating Expenses, Interest Expense
 
   if (!accounts || accounts.length === 0) return
 
@@ -85,7 +85,7 @@ async function createVehiclePurchaseEntries(supabase: Awaited<ReturnType<typeof 
   const inventoryAccount = accounts.find(a => a.code === "1200")
   const hstReceivableAccount = accounts.find(a => a.code === "1150")
   const expenseAccount = accounts.find(a => a.code === "5100")
-  const interestExpenseAccount = accounts.find(a => a.code === "5200") || expenseAccount
+  const interestExpenseAccount = accounts.find(a => a.code === "5300") || expenseAccount
 
   if (!cashAccount || !inventoryAccount) return
 
