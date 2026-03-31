@@ -341,6 +341,7 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -986,22 +987,23 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
           </div>
         </form>
       </DialogContent>
-
-      {/* Add Expense Dialog */}
-      {vehicle && (
-        <AddExpenseDialog
-          open={isAddExpenseOpen}
-          onOpenChange={setIsAddExpenseOpen}
-          vehicleId={vehicle.id}
-          vehicleInfo={{
-            year: vehicle.year,
-            make: vehicle.make,
-            model: vehicle.model,
-            stock_number: vehicle.stock_number,
-          }}
-          onSuccess={() => mutateExpenses()}
-        />
-      )}
     </Dialog>
+
+    {/* Add Expense Dialog - rendered outside parent Dialog to avoid nesting issues */}
+    {vehicle && (
+      <AddExpenseDialog
+        open={isAddExpenseOpen}
+        onOpenChange={setIsAddExpenseOpen}
+        vehicleId={vehicle.id}
+        vehicleInfo={{
+          year: vehicle.year,
+          make: vehicle.make,
+          model: vehicle.model,
+          stock_number: vehicle.stock_number,
+        }}
+        onSuccess={() => mutateExpenses()}
+      />
+    )}
+    </>
   )
 }
