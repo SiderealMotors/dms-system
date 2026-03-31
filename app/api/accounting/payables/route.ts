@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
   const { data: dbUser } = await supabase
     .from("users")
     .select("id, role")
-    .eq("id", user.id)
+    .eq("auth_id", user.id)
     .single()
 
   if (!dbUser) {

@@ -21,7 +21,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Search, Car, DollarSign, TrendingUp, Calculator, Plus, Trash2 } from "lucide-react"
+import { Loader2, Search, Car, DollarSign, TrendingUp, Calculator, Plus, Trash2, RefreshCw, CheckCircle, AlertCircle } from "lucide-react"
 import { formatCurrency, calculateLotDays, formatDate } from "@/lib/utils"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { AddExpenseDialog } from "@/components/add-expense-dialog"
@@ -96,6 +96,8 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
   const [activeTab, setActiveTab] = useState("basic")
   const [isAddExpenseOpen, setIsAddExpenseOpen] = useState(false)
   const [deletingExpenseId, setDeletingExpenseId] = useState<string | null>(null)
+  const [syncingAccounting, setSyncingAccounting] = useState(false)
+  const [syncMessage, setSyncMessage] = useState<string | null>(null)
 
   const { data: usersData } = useSWR("/api/users?role=SALES", fetcher)
   const salesUsers: User[] = usersData?.data || []
@@ -308,12 +310,6 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
         salesperson_id: form.salesperson_id || null,
         tax_rate: TAX_RATE,
       }
-      console.log("[v0] Submitting vehicle payload:", {
-        id: vehicle?.id,
-        purchase_price: payload.purchase_price,
-        floorplan_interest_cost: payload.floorplan_interest_cost,
-        floorplan_fees: payload.floorplan_fees,
-      })
       const url = vehicle ? `/api/vehicles/${vehicle.id}` : "/api/vehicles"
       const method = vehicle ? "PUT" : "POST"
       const res = await fetch(url, {
@@ -353,6 +349,26 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
       console.error("Error deleting expense:", error)
     } finally {
       setDeletingExpenseId(null)
+    }
+  }
+
+  const handleSyncAccounting = async () => {
+    if (!vehicle) return
+    setSyncingAccounting(true)
+    setSyncMessage(null)
+    try {
+      const res = await fetch(`/api/vehicles/${vehicle.id}/sync-accounting`, { method: "POST" })
+      const result = await res.json()
+      if (res.ok) {
+        setSyncMessage(`Accounting synced: ${result.entryNumber || "No costs to record"}`)
+      } else {
+        setSyncMessage(`Error: ${result.error}`)
+      }
+    } catch (error) {
+      setSyncMessage("Failed to sync accounting")
+      console.error("Error syncing accounting:", error)
+    } finally {
+      setSyncingAccounting(false)
     }
   }
 
@@ -513,6 +529,38 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
 
             {/* PURCHASE & COSTS TAB */}
             <TabsContent value="purchase" className="space-y-4 mt-4">
+              {/* Sync Accounting Button for existing vehicles */}
+              {vehicle && (
+                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <Calculator className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm">
+                      Sync purchase costs with accounting system
+                    </span>
+                    {syncMessage && (
+                      <span className={`text-sm flex items-center gap-1 ${syncMessage.startsWith("Error") ? "text-destructive" : "text-green-600"}`}>
+                        {syncMessage.startsWith("Error") ? <AlertCircle className="h-3 w-3" /> : <CheckCircle className="h-3 w-3" />}
+                        {syncMessage}
+                      </span>
+                    )}
+                  </div>
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    size="sm"
+                    onClick={handleSyncAccounting}
+                    disabled={syncingAccounting}
+                  >
+                    {syncingAccounting ? (
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4 mr-1" />
+                    )}
+                    Sync Accounting
+                  </Button>
+                </div>
+              )}
+
               {/* Vehicle Purchase */}
               <Card>
                 <CardHeader className="pb-3">
