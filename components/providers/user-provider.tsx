@@ -1,7 +1,6 @@
 "use client"
 
 import { createContext, useContext, useEffect, useState } from "react"
-import { createClient } from "@/lib/supabase/client"
 import type { User } from "@/lib/types"
 
 type UserContextType = {
@@ -21,48 +20,46 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const supabase = createClient()
-
-    // Get initial user
+    // Get user from localStorage (local auth mode)
     const getUser = async () => {
-      const { data: { user: authUser } } = await supabase.auth.getUser()
-      
-      if (authUser) {
-        const { data: dbUser } = await supabase
-          .from("users")
-          .select("*")
-          .eq("id", authUser.id)
-          .single()
-        
-        setUser(dbUser)
+      if (typeof window !== "undefined") {
+        const userStr = localStorage.getItem("user")
+        if (userStr) {
+          try {
+            const userData = JSON.parse(userStr)
+            setUser(userData)
+          } catch (err) {
+            console.error("Failed to parse user from localStorage:", err)
+            setUser(null)
+          }
+        }
       }
       setLoading(false)
     }
 
     getUser()
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
-        const { data: dbUser } = await supabase
-          .from("users")
-          .select("*")
-          .eq("id", session.user.id)
-          .single()
-        
-        setUser(dbUser)
+    // Listen for storage changes (when user signs in/out in another tab)
+    const handleStorageChange = () => {
+      const userStr = localStorage.getItem("user")
+      if (userStr) {
+        try {
+          const userData = JSON.parse(userStr)
+          setUser(userData)
+        } catch (err) {
+          setUser(null)
+        }
       } else {
         setUser(null)
       }
-      setLoading(false)
-    })
+    }
 
-    return () => subscription.unsubscribe()
+    window.addEventListener("storage", handleStorageChange)
+    return () => window.removeEventListener("storage", handleStorageChange)
   }, [])
 
   const signOut = async () => {
-    const supabase = createClient()
-    await supabase.auth.signOut()
+    localStorage.removeItem("user")
     setUser(null)
     window.location.href = "/auth/login"
   }
