@@ -1,8 +1,23 @@
+"use client"
+
+import { useEffect } from "react"
+import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 
 export default function SignUpSuccessPage() {
+  const router = useRouter()
+
+  useEffect(() => {
+    // Redirect to dashboard after 3 seconds
+    const timer = setTimeout(() => {
+      router.push("/dashboard")
+    }, 3000)
+
+    return () => clearTimeout(timer)
+  }, [router])
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/50 px-4">
       <Card className="w-full max-w-md text-center">
@@ -23,20 +38,19 @@ export default function SignUpSuccessPage() {
               </svg>
             </div>
           </div>
-          <CardTitle className="text-2xl font-bold">Check your email</CardTitle>
+          <CardTitle className="text-2xl font-bold">Account created successfully!</CardTitle>
           <CardDescription className="text-base">
-            We&apos;ve sent you a confirmation link to verify your email address
+            Your account has been set up and you&apos;re ready to go
           </CardDescription>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            Click the link in your email to complete your registration. 
-            If you don&apos;t see the email, check your spam folder.
+            You will be redirected to the dashboard in a few seconds...
           </p>
         </CardContent>
-        <CardFooter className="flex justify-center">
+        <CardFooter className="flex justify-center gap-2">
           <Button asChild variant="outline">
-            <Link href="/auth/login">Back to login</Link>
+            <Link href="/dashboard">Go to dashboard</Link>
           </Button>
         </CardFooter>
       </Card>
