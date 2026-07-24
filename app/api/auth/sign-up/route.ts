@@ -1,3 +1,4 @@
+import { createAuthClient } from "@/lib/supabase/auth-server"
 import { createClient } from "@/lib/supabase/server"
 import { NextRequest, NextResponse } from "next/server"
 
@@ -20,18 +21,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const supabase = await createClient()
+    // Use auth client with service role key for signup
+    const authClient = createAuthClient()
 
     // Sign up user with Supabase Auth
-    const { data: authData, error: authError } = await supabase.auth.signUp({
+    const { data: authData, error: authError } = await authClient.auth.admin.createUser({
       email,
       password,
-      options: {
-        emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/auth/callback`,
-        data: {
-          name,
-          role,
-        },
+      email_confirm: true, // Auto-confirm email to skip confirmation requirement
+      user_metadata: {
+        name,
+        role,
       },
     })
 
@@ -50,7 +50,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Create user record in public.users table
+    // Create user record in public.users table using regular server client
+    const supabase = await createClient()
     const { error: userError } = await supabase
       .from("users")
       .insert({
