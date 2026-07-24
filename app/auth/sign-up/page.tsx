@@ -24,7 +24,7 @@ export default function SignUpPage() {
     setError(null)
 
     try {
-      const res = await fetch("/api/auth/sign-up", {
+      const res = await fetch("/api/auth/local-signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, name, role }),
@@ -36,6 +36,11 @@ export default function SignUpPage() {
         setError(data.error || "Failed to create account")
         setLoading(false)
         return
+      }
+
+      // Store user info in localStorage for development
+      if (typeof window !== "undefined") {
+        localStorage.setItem("user", JSON.stringify(data.user))
       }
 
       router.push("/auth/sign-up-success")

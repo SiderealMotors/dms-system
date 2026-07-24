@@ -2,58 +2,52 @@ import { NextRequest, NextResponse } from "next/server"
 import crypto from "crypto"
 
 // Development-only mock authentication
-// This bypasses database calls due to sandbox network restrictions
 export async function POST(request: NextRequest) {
   try {
-    const { email, password, name, role } = await request.json()
+    const { email, password } = await request.json()
 
-    // Validate input
-    if (!email || !password || !name || !role) {
+    if (!email || !password) {
       return NextResponse.json(
-        { error: "Missing required fields" },
+        { error: "Missing email or password" },
         { status: 400 }
       )
     }
 
-    if (password.length < 6) {
-      return NextResponse.json(
-        { error: "Password must be at least 6 characters" },
-        { status: 400 }
-      )
-    }
-
-    // Generate mock user ID and session
+    // For development: accept any email/password combination
+    // In production, this would validate against a database
     const userId = crypto.randomUUID()
     const sessionToken = crypto.randomUUID()
 
-    // Create response
     const response = NextResponse.json(
       {
         success: true,
         user: {
           id: userId,
           email,
-          name,
-          role,
+          name: email.split("@")[0],
+          role: "ADMIN",
           is_active: true,
         },
       },
-      { status: 201 }
+      { status: 200 }
     )
 
-    // Set session cookie
     response.cookies.set("session_token", sessionToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge: 30 * 24 * 60 * 60, // 30 days
+      maxAge: 30 * 24 * 60 * 60,
       path: "/",
     })
 
-    // Also set a non-httpOnly cookie for client-side access to user info
     response.cookies.set(
       "user_info",
-      JSON.stringify({ id: userId, email, name, role }),
+      JSON.stringify({
+        id: userId,
+        email,
+        name: email.split("@")[0],
+        role: "ADMIN",
+      }),
       {
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
@@ -64,7 +58,7 @@ export async function POST(request: NextRequest) {
 
     return response
   } catch (error) {
-    console.error("[v0] Signup error:", error)
+    console.error("[v0] Login error:", error)
     return NextResponse.json(
       { error: "An unexpected error occurred" },
       { status: 500 }

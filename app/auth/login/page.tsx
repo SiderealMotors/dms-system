@@ -3,7 +3,6 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -21,21 +20,31 @@ export default function LoginPage() {
     setLoading(true)
     setError(null)
 
-    const supabase = createClient()
+    try {
+      const res = await fetch("/api/auth/local-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      })
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
+      const data = await res.json()
 
-    if (error) {
-      setError(error.message)
+      if (!res.ok) {
+        setError(data.error || "Failed to sign in")
+        setLoading(false)
+        return
+      }
+
+      // Store user info in localStorage
+      if (typeof window !== "undefined") {
+        localStorage.setItem("user", JSON.stringify(data.user))
+      }
+
+      router.push("/dashboard")
+    } catch (err) {
+      setError("An unexpected error occurred")
       setLoading(false)
-      return
     }
-
-    router.push("/dashboard")
-    router.refresh()
   }
 
   return (
