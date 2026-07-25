@@ -1,5 +1,16 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextRequest, NextResponse } from "next/server"
+import { ACCOUNTS } from "@/lib/accounting/accounts"
+import { calculateTax, sumMoney, toAmount } from "@/lib/accounting/money"
+import {
+  PostingError,
+  postJournalEntry,
+  resolveActingUserId,
+  reverseJournalEntry,
+  type PostingLine,
+} from "@/lib/accounting/posting"
+import { getTaxRate } from "@/lib/accounting/tax"
+import { postVehiclePurchaseEntry } from "@/lib/accounting/vehicle-entries"
 
 export async function GET(
   request: NextRequest,
@@ -29,13 +40,6 @@ export async function PUT(
   const { id } = await params
   const body = await request.json()
 
-  // Get the current vehicle data first to compare changes
-  const { data: currentVehicle } = await supabase
-    .from("vehicles")
-    .select("*")
-    .eq("id", id)
-    .single()
-
   const { data, error } = await supabase
     .from("vehicles")
     .update(body)
@@ -47,116 +51,70 @@ export async function PUT(
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Check if purchase & cost fields were updated
-  const costFields = ['purchase_price', 'miscellaneous_cost', 'safety_cost', 'gas', 'warranty_cost', 'floorplan_interest_cost', 'floorplan_fees']
-  const hasCostFieldUpdate = costFields.some(field => body[field] !== undefined)
+  const actingUserId = await resolveActingUserId(supabase)
+
+  // Re-post the acquisition entry when any cost or funding input changed.
+  const costFields = [
+    "purchase_price",
+    "miscellaneous_cost",
+    "safety_cost",
+    "gas",
+    "warranty_cost",
+    "floorplan_interest_cost",
+    "floorplan_fees",
+    "purchase_payment_method",
+    "purchase_hst_applicable",
+    "date_acquired",
+  ]
+  const hasCostFieldUpdate = costFields.some((field) => body[field] !== undefined)
+
+  const warnings: string[] = []
 
   if (hasCostFieldUpdate) {
-    await updateVehiclePurchaseEntries(supabase, data, currentVehicle)
-  }
-
-  // If vehicle has sale-related fields updated, sync with linked AR/invoice
-  const saleFields = ['selling_price', 'safety_charge', 'warranty_charge', 'omvic_fee', 'registration_fee', 'referral_amount']
-  const hasSaleFieldUpdate = saleFields.some(field => body[field] !== undefined)
-
-  if (hasSaleFieldUpdate) {
-    // Find any linked accounts receivable for this vehicle
-    const { data: linkedAR } = await supabase
-      .from("accounts_receivable")
-      .select("id, journal_entry_id")
-      .eq("vehicle_id", id)
-      .eq("status", "UNPAID")
-
-    if (linkedAR && linkedAR.length > 0) {
-      const TAX_RATE = 0.13
-      
-      // Calculate new invoice totals from vehicle data
-      const sellingPrice = Number(data.selling_price) || 0
-      const safetyCharge = Number(data.safety_charge) || 0
-      const warrantyCharge = Number(data.warranty_charge) || 0
-      const omvicFee = Number(data.omvic_fee) || 0
-      const registrationFee = Number(data.registration_fee) || 0 // Not taxable
-      const referralAmount = Number(data.referral_amount) || 0 // Not taxable, income
-      
-      // Taxable items
-      const taxableSubtotal = sellingPrice + safetyCharge + warrantyCharge + omvicFee
-      const taxAmount = taxableSubtotal * TAX_RATE
-      const totalAmount = taxableSubtotal + taxAmount + registrationFee
-
-      // Update AR record
-      for (const ar of linkedAR) {
-        await supabase
-          .from("accounts_receivable")
-          .update({
-            subtotal: taxableSubtotal + registrationFee,
-            tax_amount: taxAmount,
-            total_amount: totalAmount,
-            description: `Vehicle Sale: ${data.year} ${data.make} ${data.model} (${data.stock_number})`,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", ar.id)
-
-        // If there's a linked journal entry, update it too
-        if (ar.journal_entry_id) {
-          // Get GL account IDs
-          const { data: accounts } = await supabase
-            .from("gl_accounts")
-            .select("id, code")
-            .in("code", ["1100", "4000", "2200"])
-
-          const arAccountId = accounts?.find(a => a.code === "1100")?.id
-          const salesRevenueId = accounts?.find(a => a.code === "4000")?.id
-          const hstPayableId = accounts?.find(a => a.code === "2200")?.id
-
-          if (arAccountId && salesRevenueId && hstPayableId) {
-            // Delete old line items
-            await supabase
-              .from("journal_line_items")
-              .delete()
-              .eq("journal_entry_id", ar.journal_entry_id)
-
-            // Insert updated line items
-            await supabase
-              .from("journal_line_items")
-              .insert([
-                {
-                  journal_entry_id: ar.journal_entry_id,
-                  account_id: arAccountId,
-                  debit: totalAmount,
-                  credit: 0,
-                  memo: "Accounts Receivable",
-                },
-                {
-                  journal_entry_id: ar.journal_entry_id,
-                  account_id: salesRevenueId,
-                  debit: 0,
-                  credit: taxableSubtotal + registrationFee,
-                  memo: "Vehicle Sale Revenue",
-                },
-                {
-                  journal_entry_id: ar.journal_entry_id,
-                  account_id: hstPayableId,
-                  debit: 0,
-                  credit: taxAmount,
-                  memo: "HST Collected",
-                },
-              ])
-
-            // Update journal entry description
-            await supabase
-              .from("journal_entries")
-              .update({
-                description: `Vehicle Sale: ${data.year} ${data.make} ${data.model} (${data.stock_number})`,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", ar.journal_entry_id)
-          }
-        }
+    try {
+      await postVehiclePurchaseEntry(supabase, data, {
+        createdBy: actingUserId,
+        reason: "Vehicle acquisition costs revised",
+      })
+    } catch (err) {
+      if (err instanceof PostingError) {
+        // Surface the failure instead of returning 200 with no entry written.
+        return NextResponse.json(
+          { error: `Vehicle saved, but the acquisition entry could not be posted: ${err.message}`, data },
+          { status: 422 },
+        )
       }
+      throw err
     }
   }
 
-  return NextResponse.json({ data })
+  // Keep any linked receivable/invoice in step with the vehicle's sale terms.
+  const saleFields = [
+    "selling_price",
+    "safety_charge",
+    "warranty_charge",
+    "omvic_fee",
+    "registration_fee",
+    "referral_amount",
+  ]
+  const hasSaleFieldUpdate = saleFields.some((field) => body[field] !== undefined)
+
+  if (hasSaleFieldUpdate) {
+    try {
+      const result = await syncLinkedReceivable(supabase, data, actingUserId)
+      warnings.push(...result.warnings)
+    } catch (err) {
+      if (err instanceof PostingError) {
+        return NextResponse.json(
+          { error: `Vehicle saved, but the sale entry could not be re-posted: ${err.message}`, data },
+          { status: 422 },
+        )
+      }
+      throw err
+    }
+  }
+
+  return NextResponse.json({ data, warnings: warnings.length ? warnings : undefined })
 }
 
 export async function DELETE(
@@ -166,17 +124,25 @@ export async function DELETE(
   const supabase = await createClient()
   const { id } = await params
 
-  // Get the vehicle to find its linked journal entry
   const { data: vehicle } = await supabase
     .from("vehicles")
-    .select("purchase_journal_entry_id")
+    .select("purchase_journal_entry_id, stock_number")
     .eq("id", id)
     .single()
 
-  // Delete the linked purchase journal entry if it exists
+  const actingUserId = await resolveActingUserId(supabase)
+
+  // Posted entries are immutable: reverse rather than delete, so the audit
+  // trail survives the vehicle record.
   if (vehicle?.purchase_journal_entry_id) {
-    await supabase.from("journal_line_items").delete().eq("journal_entry_id", vehicle.purchase_journal_entry_id)
-    await supabase.from("journal_entries").delete().eq("id", vehicle.purchase_journal_entry_id)
+    await reverseJournalEntry(supabase, vehicle.purchase_journal_entry_id as string, {
+      reason: `Vehicle ${vehicle.stock_number ?? id} deleted`,
+      createdBy: actingUserId,
+    })
+    await supabase
+      .from("vehicles")
+      .update({ purchase_journal_entry_id: null })
+      .eq("id", id)
   }
 
   const { error } = await supabase.from("vehicles").delete().eq("id", id)
@@ -188,165 +154,130 @@ export async function DELETE(
   return NextResponse.json({ success: true })
 }
 
-// Helper function to update/recreate journal entries for vehicle purchase & costs
-async function updateVehiclePurchaseEntries(
-  supabase: Awaited<ReturnType<typeof createClient>>, 
+/**
+ * Recompute a vehicle's invoice totals and re-post its sale entry.
+ *
+ * Corrections are made by reversing the prior entry and posting a replacement,
+ * so the general ledger keeps a complete history.
+ */
+async function syncLinkedReceivable(
+  supabase: Awaited<ReturnType<typeof createClient>>,
   vehicle: Record<string, unknown>,
-  previousVehicle: Record<string, unknown> | null
-) {
-  const TAX_RATE = 0.13
-  
-  // Get GL account IDs
-  const { data: accounts } = await supabase
-    .from("gl_accounts")
-    .select("id, code")
-    .in("code", ["1000", "1200", "1150", "5100", "5300"]) // Cash, Inventory, HST Receivable, Operating Exp, Interest Exp
+  actingUserId: string | null,
+): Promise<{ warnings: string[] }> {
+  const warnings: string[] = []
 
-  if (!accounts || accounts.length === 0) return
+  // Look at every receivable for the unit, not just UNPAID ones -- restricting
+  // to UNPAID let a partially-paid invoice silently diverge from the vehicle.
+  const { data: linkedAR } = await supabase
+    .from("accounts_receivable")
+    .select("id, journal_entry_id, status, amount_paid")
+    .eq("vehicle_id", vehicle.id as string)
 
-  const cashAccount = accounts.find(a => a.code === "1000")
-  const inventoryAccount = accounts.find(a => a.code === "1200")
-  const hstReceivableAccount = accounts.find(a => a.code === "1150")
-  const expenseAccount = accounts.find(a => a.code === "5100")
-  const interestExpenseAccount = accounts.find(a => a.code === "5300") || expenseAccount
+  if (!linkedAR || linkedAR.length === 0) return { warnings }
 
-  if (!cashAccount || !inventoryAccount) return
+  const taxRate = getTaxRate(vehicle.date_sold as string | null)
 
-  // Get current user
-  const { data: { user } } = await supabase.auth.getUser()
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user?.id).single()
+  const sellingPrice = toAmount(vehicle.selling_price)
+  const safetyCharge = toAmount(vehicle.safety_charge)
+  const warrantyCharge = toAmount(vehicle.warranty_charge)
+  const omvicFee = toAmount(vehicle.omvic_fee)
+  // MTO registration is collected as agent for the ministry: a pass-through
+  // liability, not revenue, and not taxable.
+  const registrationFee = toAmount(vehicle.registration_fee)
+  const referralAmount = toAmount(vehicle.referral_amount)
 
-  // If there's an existing purchase journal entry, delete it first
-  // We need to fetch the current JE ID from the database since the vehicle object may not have it
-  const { data: vehicleWithJE } = await supabase
-    .from("vehicles")
-    .select("purchase_journal_entry_id")
-    .eq("id", vehicle.id)
-    .single()
-  
-  const existingJEId = vehicleWithJE?.purchase_journal_entry_id as string | null
-  if (existingJEId) {
-    await supabase.from("journal_line_items").delete().eq("journal_entry_id", existingJEId)
-    await supabase.from("journal_entries").delete().eq("id", existingJEId)
-  }
+  const taxableSubtotal = sumMoney([sellingPrice, safetyCharge, warrantyCharge, omvicFee])
+  const taxAmount = calculateTax(taxableSubtotal, taxRate)
+  const totalAmount = sumMoney([taxableSubtotal, taxAmount, registrationFee])
 
-  // Cost items that need journal entries (taxable costs)
-  const taxableCosts = [
-    { field: 'purchase_price', amount: Number(vehicle.purchase_price) || 0, memo: 'Vehicle Purchase', account: inventoryAccount },
-    { field: 'miscellaneous_cost', amount: Number(vehicle.miscellaneous_cost) || 0, memo: 'Miscellaneous Cost', account: inventoryAccount },
-    { field: 'safety_cost', amount: Number(vehicle.safety_cost) || 0, memo: 'Safety Inspection', account: inventoryAccount },
-    { field: 'gas', amount: Number(vehicle.gas) || 0, memo: 'Gas/Fuel', account: expenseAccount },
-    { field: 'warranty_cost', amount: Number(vehicle.warranty_cost) || 0, memo: 'Warranty Cost', account: expenseAccount },
-  ]
+  const description = `Vehicle sale: ${vehicle.year ?? ""} ${vehicle.make ?? ""} ${vehicle.model ?? ""} (${vehicle.stock_number ?? ""})`.trim()
 
-  // Non-taxable costs (interest/fees)
-  const nonTaxableCosts = [
-    { field: 'floorplan_interest_cost', amount: Number(vehicle.floorplan_interest_cost) || 0, memo: 'Floorplan Interest', account: interestExpenseAccount },
-    { field: 'floorplan_fees', amount: Number(vehicle.floorplan_fees) || 0, memo: 'Floorplan Fees', account: expenseAccount },
-  ]
+  for (const ar of linkedAR) {
+    const amountPaid = toAmount(ar.amount_paid)
 
-  // Calculate total taxable costs
-  const totalTaxableAmount = taxableCosts.reduce((sum, c) => sum + c.amount, 0)
-  const totalNonTaxableAmount = nonTaxableCosts.reduce((sum, c) => sum + c.amount, 0)
-  
-  if (totalTaxableAmount === 0 && totalNonTaxableAmount === 0) {
-    // Clear the journal entry link since there are no costs
-    await supabase.from("vehicles").update({ purchase_journal_entry_id: null }).eq("id", vehicle.id)
-    return
-  }
+    if (amountPaid > totalAmount) {
+      warnings.push(
+        `Receivable is already paid ${amountPaid.toFixed(2)} but the revised invoice total is ` +
+          `${totalAmount.toFixed(2)}. Issue a refund or credit note rather than reducing the invoice.`,
+      )
+      continue
+    }
 
-  const totalTax = totalTaxableAmount * TAX_RATE
-  const grandTotal = totalTaxableAmount + totalTax + totalNonTaxableAmount
+    await supabase
+      .from("accounts_receivable")
+      .update({
+        subtotal: sumMoney([taxableSubtotal, registrationFee]),
+        tax_amount: taxAmount,
+        total_amount: totalAmount,
+        description,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", ar.id)
 
-  // Generate entry number
-  const { data: lastEntry } = await supabase
-    .from("journal_entries")
-    .select("entry_number")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single()
+    if (!ar.journal_entry_id) continue
 
-  const nextNum = lastEntry 
-    ? parseInt(lastEntry.entry_number.replace("JE-", "")) + 1 
-    : 1
-  const entryNumber = `JE-${String(nextNum).padStart(5, "0")}`
-
-  // Create new journal entry
-  const { data: journalEntry, error: jeError } = await supabase
-    .from("journal_entries")
-    .insert({
-      entry_number: entryNumber,
-      entry_date: (vehicle.date_acquired as string) || new Date().toISOString().split("T")[0],
-      description: `Vehicle Purchase: ${vehicle.year} ${vehicle.make} ${vehicle.model} (${vehicle.stock_number})`,
-      status: "POSTED",
-      posted_at: new Date().toISOString(),
-      created_by: dbUser?.id || null,
+    await reverseJournalEntry(supabase, ar.journal_entry_id as string, {
+      reason: "Sale terms revised",
+      createdBy: actingUserId,
     })
-    .select()
-    .single()
 
-  if (jeError || !journalEntry) return
+    const lines: PostingLine[] = [
+      {
+        code: ACCOUNTS.ACCOUNTS_RECEIVABLE,
+        debit: totalAmount,
+        memo: "Accounts receivable - customer",
+      },
+    ]
 
-  // Create line items
-  const lineItems: Array<{
-    journal_entry_id: string
-    account_id: string
-    debit: number
-    credit: number
-    memo: string
-  }> = []
+    if (sellingPrice > 0) {
+      lines.push({ code: ACCOUNTS.VEHICLE_SALES, credit: sellingPrice, memo: "Vehicle sales revenue" })
+    }
+    if (safetyCharge > 0) {
+      lines.push({ code: ACCOUNTS.SAFETY_REVENUE, credit: safetyCharge, memo: "Safety certification revenue" })
+    }
+    if (warrantyCharge > 0) {
+      lines.push({ code: ACCOUNTS.WARRANTY_REVENUE, credit: warrantyCharge, memo: "Warranty revenue" })
+    }
+    if (omvicFee > 0) {
+      lines.push({ code: ACCOUNTS.OMVIC_REVENUE, credit: omvicFee, memo: "OMVIC fee recovered" })
+    }
+    if (registrationFee > 0) {
+      lines.push({
+        code: ACCOUNTS.REGISTRATION_PAYABLE,
+        credit: registrationFee,
+        memo: "Registration collected on behalf of MTO (pass-through)",
+      })
+    }
+    if (taxAmount > 0) {
+      lines.push({ code: ACCOUNTS.HST_PAYABLE, credit: taxAmount, memo: "HST collected on sale" })
+    }
 
-  // Add taxable cost items (debit to appropriate accounts)
-  for (const cost of taxableCosts) {
-    if (cost.amount > 0 && cost.account) {
-      lineItems.push({
-        journal_entry_id: journalEntry.id,
-        account_id: cost.account.id,
-        debit: cost.amount,
-        credit: 0,
-        memo: cost.memo,
+    const entry = await postJournalEntry(supabase, {
+      entryDate: new Date().toISOString().split("T")[0],
+      description,
+      lines,
+      createdBy: actingUserId,
+    })
+
+    await supabase
+      .from("accounts_receivable")
+      .update({ journal_entry_id: entry.id })
+      .eq("id", ar.id)
+
+    // Referral paid to a third party is an expense, not a reduction of revenue.
+    if (referralAmount > 0) {
+      await postJournalEntry(supabase, {
+        entryDate: new Date().toISOString().split("T")[0],
+        description: `Referral fee - ${vehicle.stock_number ?? ""}`.trim(),
+        lines: [
+          { code: ACCOUNTS.REFERRAL_FEES, debit: referralAmount, memo: "Referral fee expense" },
+          { code: ACCOUNTS.ACCOUNTS_PAYABLE, credit: referralAmount, memo: "Referral fee payable" },
+        ],
+        createdBy: actingUserId,
       })
     }
   }
 
-  // Add non-taxable cost items
-  for (const cost of nonTaxableCosts) {
-    if (cost.amount > 0 && cost.account) {
-      lineItems.push({
-        journal_entry_id: journalEntry.id,
-        account_id: cost.account.id,
-        debit: cost.amount,
-        credit: 0,
-        memo: cost.memo,
-      })
-    }
-  }
-
-  // Add HST (Sales Tax Receivable) for input tax credits
-  if (totalTax > 0 && hstReceivableAccount) {
-    lineItems.push({
-      journal_entry_id: journalEntry.id,
-      account_id: hstReceivableAccount.id,
-      debit: totalTax,
-      credit: 0,
-      memo: "HST on purchases (input tax credit)",
-    })
-  }
-
-  // Credit Cash for total paid
-  lineItems.push({
-    journal_entry_id: journalEntry.id,
-    account_id: cashAccount.id,
-    debit: 0,
-    credit: grandTotal,
-    memo: "Cash payment for vehicle costs",
-  })
-
-  await supabase.from("journal_line_items").insert(lineItems)
-
-  // Link the journal entry to the vehicle
-  await supabase
-    .from("vehicles")
-    .update({ purchase_journal_entry_id: journalEntry.id })
-    .eq("id", vehicle.id)
+  return { warnings }
 }
