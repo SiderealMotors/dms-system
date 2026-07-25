@@ -9,7 +9,10 @@ import {
   type PostingLine,
 } from "@/lib/accounting/posting"
 import { getTaxRate } from "@/lib/accounting/tax"
-import { getCapitalizedInventoryCost } from "@/lib/accounting/vehicle-entries"
+import {
+  buildInventoryReliefLines,
+  getCapitalizedInventoryCost,
+} from "@/lib/accounting/vehicle-entries"
 
 /**
  * Post the sale of a vehicle.
@@ -93,7 +96,8 @@ export async function POST(request: NextRequest) {
   // Full capitalized cost, read from the database. Relieving only
   // purchase_price -- as the old code did -- stranded every other capitalized
   // cost in inventory forever and understated COGS on every deal.
-  const capitalizedCost = await getCapitalizedInventoryCost(supabase, vehicleId)
+  const { total: capitalizedCost, byAccount: inventoryByAccount } =
+    await getCapitalizedInventoryCost(supabase, vehicleId)
 
   const describeVehicle = `${vehicle.year ?? ""} ${vehicle.make ?? ""} ${vehicle.model ?? ""} (${vehicle.stock_number ?? ""})`.trim()
   const description = `Vehicle sale: ${describeVehicle}${body.buyerName ? ` to ${body.buyerName}` : ""}`
@@ -111,13 +115,13 @@ export async function POST(request: NextRequest) {
     lines.push({ code: ACCOUNTS.VEHICLE_SALES, credit: sellingPrice, memo: "Vehicle sales revenue" })
   }
   if (safetyCharge > 0) {
-    lines.push({ code: ACCOUNTS.SAFETY_REVENUE, credit: safetyCharge, memo: "Safety certification revenue" })
+    lines.push({ code: ACCOUNTS.SERVICE_REVENUE, credit: safetyCharge, memo: "Safety certification revenue" })
   }
   if (warrantyCharge > 0) {
-    lines.push({ code: ACCOUNTS.WARRANTY_REVENUE, credit: warrantyCharge, memo: "Warranty revenue" })
+    lines.push({ code: ACCOUNTS.OTHER_REVENUE, credit: warrantyCharge, memo: "Warranty revenue" })
   }
   if (omvicFee > 0) {
-    lines.push({ code: ACCOUNTS.OMVIC_REVENUE, credit: omvicFee, memo: "OMVIC fee recovered" })
+    lines.push({ code: ACCOUNTS.OMVIC_PAYABLE, credit: omvicFee, memo: "OMVIC fee recovered" })
   }
   if (registrationFee > 0) {
     lines.push({
@@ -137,11 +141,9 @@ export async function POST(request: NextRequest) {
       debit: capitalizedCost,
       memo: "Cost of vehicle sold (full capitalized cost)",
     })
-    lines.push({
-      code: ACCOUNTS.VEHICLE_INVENTORY,
-      credit: capitalizedCost,
-      memo: "Relieve vehicle from inventory",
-    })
+    // Credit each inventory subaccount for its own balance, so 1210/1220 are
+    // cleared rather than left overstated.
+    lines.push(...buildInventoryReliefLines(inventoryByAccount))
   }
 
   let entry

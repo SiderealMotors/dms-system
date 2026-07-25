@@ -1,5 +1,11 @@
 import type { createClient } from "@/lib/supabase/server"
-import { ACCOUNTS, creditAccountForPaymentMethod } from "./accounts"
+import {
+  ACCOUNTS,
+  creditAccountForPaymentMethod,
+  debitAccountForExpenseType,
+  isCapitalizedExpenseType,
+  type AccountCode,
+} from "./accounts"
 import { calculateTax, sumMoney, toAmount } from "./money"
 import {
   postJournalEntry,
@@ -20,11 +26,38 @@ type VehicleRow = Record<string, unknown>
  * capitalized into inventory (IAS 23.4).
  */
 const CAPITALIZED_COMPONENTS = [
-  { field: "purchase_price", memo: "Vehicle purchase price", taxable: true },
-  { field: "miscellaneous_cost", memo: "Miscellaneous acquisition cost", taxable: true },
-  { field: "safety_cost", memo: "Safety inspection", taxable: true },
-  { field: "gas", memo: "Fuel for lot prep", taxable: true },
-  { field: "warranty_cost", memo: "Warranty cost", taxable: true },
+  {
+    field: "purchase_price",
+    memo: "Vehicle purchase price",
+    account: ACCOUNTS.VEHICLE_INVENTORY,
+    taxable: true,
+  },
+  {
+    field: "miscellaneous_cost",
+    memo: "Miscellaneous acquisition cost",
+    account: ACCOUNTS.VEHICLE_INVENTORY,
+    taxable: true,
+  },
+  {
+    // The live chart has a dedicated subaccount for this; using it keeps
+    // safety spend visible on the balance sheet instead of buried in one total.
+    field: "safety_cost",
+    memo: "Safety inspection",
+    account: ACCOUNTS.VEHICLE_INVENTORY_SAFETY,
+    taxable: true,
+  },
+  {
+    field: "gas",
+    memo: "Fuel for lot prep",
+    account: ACCOUNTS.VEHICLE_INVENTORY,
+    taxable: true,
+  },
+  {
+    field: "warranty_cost",
+    memo: "Warranty cost",
+    account: ACCOUNTS.VEHICLE_INVENTORY_RECONDITIONING,
+    taxable: true,
+  },
 ] as const
 
 const PERIOD_COMPONENTS = [
@@ -82,7 +115,7 @@ export function buildVehiclePurchaseLines(vehicle: VehicleRow): {
 
   for (const component of capitalized) {
     lines.push({
-      code: ACCOUNTS.VEHICLE_INVENTORY,
+      code: component.account,
       debit: component.amount,
       memo: component.memo,
     })
@@ -210,20 +243,24 @@ export async function postVehiclePurchaseEntry(
 export async function getCapitalizedInventoryCost(
   supabase: SupabaseServerClient,
   vehicleId: string,
-): Promise<number> {
+): Promise<{ total: number; byAccount: Map<AccountCode, number> }> {
+  const byAccount = new Map<AccountCode, number>()
+  const add = (code: AccountCode, amount: number) => {
+    if (amount <= 0) return
+    byAccount.set(code, sumMoney([byAccount.get(code) ?? 0, amount]))
+  }
+
   const { data: vehicle } = await supabase
     .from("vehicles")
-    .select(
-      "purchase_price, miscellaneous_cost, safety_cost, gas, warranty_cost",
-    )
+    .select("purchase_price, miscellaneous_cost, safety_cost, gas, warranty_cost")
     .eq("id", vehicleId)
     .single()
 
-  if (!vehicle) return 0
+  if (!vehicle) return { total: 0, byAccount }
 
-  const base = sumMoney(
-    CAPITALIZED_COMPONENTS.map((c) => toAmount((vehicle as VehicleRow)[c.field])),
-  )
+  for (const component of CAPITALIZED_COMPONENTS) {
+    add(component.account, toAmount((vehicle as VehicleRow)[component.field]))
+  }
 
   // Capitalizable additional expenses recorded against the unit.
   const { data: expenses } = await supabase
@@ -231,16 +268,31 @@ export async function getCapitalizedInventoryCost(
     .select("amount, expense_type")
     .eq("vehicle_id", vehicleId)
 
-  const capitalizedExpenses = sumMoney(
-    (expenses ?? [])
-      .filter((e) => {
-        const type = String(e.expense_type ?? "").toUpperCase()
-        return ["REPAIR", "PARTS", "DETAILING", "INSPECTION", "SAFETY", "RECONDITIONING", "TOWING", "TRANSPORT"].includes(
-          type,
-        )
-      })
-      .map((e) => toAmount(e.amount)),
-  )
+  // Single source of truth for which types capitalize, shared with the expense
+  // posting path so the two can never disagree about what is in inventory.
+  for (const expense of expenses ?? []) {
+    const type = expense.expense_type as string | null
+    if (!isCapitalizedExpenseType(type)) continue
+    add(debitAccountForExpenseType(type), toAmount(expense.amount))
+  }
 
-  return sumMoney([base, capitalizedExpenses])
+  return { total: sumMoney([...byAccount.values()]), byAccount }
+}
+
+/**
+ * Credit lines that fully relieve a vehicle's cost from inventory.
+ *
+ * Each inventory subaccount is credited for its own balance. Crediting the
+ * whole cost to the base account would leave 1210/1220 permanently overstated.
+ */
+export function buildInventoryReliefLines(
+  byAccount: Map<AccountCode, number>,
+): PostingLine[] {
+  return [...byAccount.entries()]
+    .filter(([, amount]) => amount > 0)
+    .map(([code, amount]) => ({
+      code,
+      credit: amount,
+      memo: "Relieve capitalized cost from inventory",
+    }))
 }

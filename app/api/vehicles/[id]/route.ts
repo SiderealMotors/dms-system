@@ -234,13 +234,13 @@ async function syncLinkedReceivable(
       lines.push({ code: ACCOUNTS.VEHICLE_SALES, credit: sellingPrice, memo: "Vehicle sales revenue" })
     }
     if (safetyCharge > 0) {
-      lines.push({ code: ACCOUNTS.SAFETY_REVENUE, credit: safetyCharge, memo: "Safety certification revenue" })
+      lines.push({ code: ACCOUNTS.SERVICE_REVENUE, credit: safetyCharge, memo: "Safety certification revenue" })
     }
     if (warrantyCharge > 0) {
-      lines.push({ code: ACCOUNTS.WARRANTY_REVENUE, credit: warrantyCharge, memo: "Warranty revenue" })
+      lines.push({ code: ACCOUNTS.OTHER_REVENUE, credit: warrantyCharge, memo: "Warranty revenue" })
     }
     if (omvicFee > 0) {
-      lines.push({ code: ACCOUNTS.OMVIC_REVENUE, credit: omvicFee, memo: "OMVIC fee recovered" })
+      lines.push({ code: ACCOUNTS.OMVIC_PAYABLE, credit: omvicFee, memo: "OMVIC fee recovered" })
     }
     if (registrationFee > 0) {
       lines.push({

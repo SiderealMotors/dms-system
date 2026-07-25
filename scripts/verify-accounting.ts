@@ -11,7 +11,7 @@
 import { buildVehiclePurchaseLines } from "../lib/accounting/vehicle-entries"
 import { balanceLines, parseEntrySequence, PostingError, type PostingLine } from "../lib/accounting/posting"
 import { roundMoney, sumMoney, calculateTax } from "../lib/accounting/money"
-import { ACCOUNTS } from "../lib/accounting/accounts"
+import { ACCOUNTS, VEHICLE_INVENTORY_ACCOUNTS } from "../lib/accounting/accounts"
 
 let passed = 0
 let failed = 0
@@ -92,14 +92,31 @@ console.log("\n=== Scenario 1: the original failing purchase (Stock #12 shape) =
     `got ${debitTo(lines, ACCOUNTS.HST_RECEIVABLE)}`,
   )
   check("grand total is 24,020.40", t.grandTotal === 24020.4, `got ${t.grandTotal}`)
+  // Capitalized cost is split across the three inventory accounts the live
+  // chart provides: base 20,000 + 200 misc + 80 gas, safety 500, warranty 300.
   check(
-    "inventory debited 21,080.00 (not parts 1200)",
-    debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY) === 21080,
+    "base inventory (1200) debited 20,280.00",
+    debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY) === 20280,
     `got ${debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY)}`,
   )
   check(
-    "floorplan interest hits 6400, not reconditioning 5300",
-    debitTo(lines, ACCOUNTS.FLOORPLAN_INTEREST) === 150,
+    "safety capitalized to its own subaccount (1210)",
+    debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY_SAFETY) === 500,
+    `got ${debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY_SAFETY)}`,
+  )
+  check(
+    "reconditioning subaccount (1220) carries warranty cost",
+    debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY_RECONDITIONING) === 300,
+    `got ${debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY_RECONDITIONING)}`,
+  )
+  check(
+    "inventory accounts together hold 21,080.00",
+    sumMoney(VEHICLE_INVENTORY_ACCOUNTS.map((c) => debitTo(lines, c))) === 21080,
+  )
+  check(
+    "floorplan interest hits 5400 (Floorplan Interest), not 6400 Insurance",
+    debitTo(lines, ACCOUNTS.FLOORPLAN_INTEREST) === 150 &&
+      ACCOUNTS.FLOORPLAN_INTEREST === "5400",
     `got ${debitTo(lines, ACCOUNTS.FLOORPLAN_INTEREST)}`,
   )
 }
@@ -203,7 +220,7 @@ console.log("\n=== Scenario 6: balanceLines rejects what the old code posted ===
   // HST debit line missing.
   const broken = [
     { code: ACCOUNTS.VEHICLE_INVENTORY, debit: 20700, memo: "inventory" },
-    { code: ACCOUNTS.SAFETY_COST, debit: 430, memo: "misc" },
+    { code: ACCOUNTS.VEHICLE_INVENTORY_SAFETY, debit: 430, memo: "misc" },
     { code: ACCOUNTS.FLOORPLAN_INTEREST, debit: 150, memo: "interest" },
     { code: ACCOUNTS.CASH, credit: 24020.4, memo: "cash" },
   ]
@@ -221,9 +238,9 @@ console.log("\n=== Scenario 6: balanceLines rejects what the old code posted ===
   const brokenSale = [
     { code: ACCOUNTS.ACCOUNTS_RECEIVABLE, debit: 26000, memo: "ar" },
     { code: ACCOUNTS.VEHICLE_SALES, credit: 25000, memo: "rev" },
-    { code: ACCOUNTS.SAFETY_REVENUE, credit: 1000, memo: "safety rev" },
-    { code: ACCOUNTS.SAFETY_COST, debit: 600, memo: "safety cost, no credit" },
-    { code: ACCOUNTS.WARRANTY_COST, debit: 400, memo: "warranty cost, no credit" },
+    { code: ACCOUNTS.SERVICE_REVENUE, credit: 1000, memo: "safety rev" },
+    { code: ACCOUNTS.VEHICLE_INVENTORY_SAFETY, debit: 600, memo: "safety cost, no credit" },
+    { code: ACCOUNTS.WARRANTY_COSTS, debit: 400, memo: "warranty cost, no credit" },
   ]
   let saleThrew = false
   try {
@@ -293,7 +310,12 @@ console.log("\n=== Scenario 7: full deal lifecycle, gross profit and COGS relief
   const { lines: purchaseLines, totals: pt } = buildVehiclePurchaseLines(vehicle)
   assertBalanced("Scenario 7 purchase", purchaseLines)
 
-  const inventoryIn = debitTo(purchaseLines, ACCOUNTS.VEHICLE_INVENTORY)
+  // Sum across ALL inventory accounts. Reading only 1200 would silently miss
+  // the safety (1210) and reconditioning (1220) subaccounts, and would make the
+  // "fully relieved" check below unfalsifiable.
+  const inventoryIn = sumMoney(
+    VEHICLE_INVENTORY_ACCOUNTS.map((code) => debitTo(purchaseLines, code)),
+  )
 
   // Sale side, mirroring the sale route's construction.
   const sellingPrice = 25000
@@ -309,17 +331,25 @@ console.log("\n=== Scenario 7: full deal lifecycle, gross profit and COGS relief
   const saleLines = [
     { code: ACCOUNTS.ACCOUNTS_RECEIVABLE, debit: gross, memo: "ar" },
     { code: ACCOUNTS.VEHICLE_SALES, credit: sellingPrice, memo: "rev" },
-    { code: ACCOUNTS.SAFETY_REVENUE, credit: safetyCharge, memo: "safety rev" },
-    { code: ACCOUNTS.WARRANTY_REVENUE, credit: warrantyCharge, memo: "warranty rev" },
-    { code: ACCOUNTS.OMVIC_REVENUE, credit: omvicFee, memo: "omvic" },
+    { code: ACCOUNTS.SERVICE_REVENUE, credit: safetyCharge, memo: "safety rev" },
+    { code: ACCOUNTS.OTHER_REVENUE, credit: warrantyCharge, memo: "warranty rev" },
+    { code: ACCOUNTS.OMVIC_PAYABLE, credit: omvicFee, memo: "omvic" },
     { code: ACCOUNTS.REGISTRATION_PAYABLE, credit: registrationFee, memo: "reg pass-through" },
     { code: ACCOUNTS.HST_PAYABLE, credit: taxAmount, memo: "hst collected" },
     { code: ACCOUNTS.COGS, debit: capitalizedCost, memo: "cogs" },
-    { code: ACCOUNTS.VEHICLE_INVENTORY, credit: capitalizedCost, memo: "relieve inventory" },
+    // Each inventory account is relieved for its own balance, as the sale route
+    // does via buildInventoryReliefLines.
+    ...VEHICLE_INVENTORY_ACCOUNTS.map((code) => ({
+      code,
+      credit: debitTo(purchaseLines, code),
+      memo: "relieve inventory",
+    })).filter((l) => l.credit > 0),
   ]
   assertBalanced("Scenario 7 sale", saleLines)
 
-  const inventoryOut = creditTo(saleLines, ACCOUNTS.VEHICLE_INVENTORY)
+  const inventoryOut = sumMoney(
+    VEHICLE_INVENTORY_ACCOUNTS.map((code) => creditTo(saleLines, code)),
+  )
   check(
     "inventory fully relieved (nothing stranded)",
     roundMoney(inventoryIn - inventoryOut) === 0,
@@ -340,11 +370,11 @@ console.log("\n=== Scenario 7: full deal lifecycle, gross profit and COGS relief
   // Safety and warranty costs must appear exactly once, inside COGS.
   check(
     "safety cost not expensed twice",
-    debitTo(saleLines, ACCOUNTS.SAFETY_COST) === 0,
+    debitTo(saleLines, ACCOUNTS.VEHICLE_INVENTORY_SAFETY) === 0,
   )
   check(
     "warranty cost not expensed twice",
-    debitTo(saleLines, ACCOUNTS.WARRANTY_COST) === 0,
+    debitTo(saleLines, ACCOUNTS.WARRANTY_COSTS) === 0,
   )
   check(
     "floorplan interest not re-expensed at sale",

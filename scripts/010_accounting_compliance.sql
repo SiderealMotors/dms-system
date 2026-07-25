@@ -1,37 +1,38 @@
 -- ============================================================================
--- Accounting compliance remediation
+-- Accounting hardening
 --
--- Fixes, in order:
---   1. Adds the GL accounts the application code references but that were
---      never seeded. The missing 1150 HST Receivable is why every purchase
---      entry was out of balance by exactly the tax amount: the code looked it
---      up, got undefined, skipped the debit line, but still credited cash for
---      the tax-inclusive total.
---   2. Adds audit-trail columns so posted entries can be reversed instead of
---      deleted and recreated.
---   3. Adds a UNIQUE constraint on entry_number so concurrent posts cannot
---      produce duplicates (this is what caused the duplicate JE-00002).
---   4. Repairs "JE-00NaN" entry numbers left by the old parseInt bug.
---   5. Adds purchase funding method + HST-registrant tracking.
+-- Scope, verified against the live database before writing:
+--   1. Adds the few GL accounts the code needs that were genuinely absent.
+--      NOTE: 1150 (Sales Tax Receivable) already exists in production and is
+--      NOT touched here. An earlier draft of this migration wrongly assumed it
+--      was missing.
+--   2. Adds reversal columns so posted entries are reversed, never deleted.
+--   3. Enforces UNIQUE on entry_number so concurrent posts cannot collide.
+--      (No duplicates exist today; this is preventative.)
+--   4. Repairs any entry_number containing no digits, defensively.
+--   5. Adds purchase funding method + HST-registrant tracking, and links from
+--      source documents to their journal entries.
 --   6. Adds balance / trial-balance views so imbalances are detectable.
+--
+-- Column names match the live schema: gl_accounts uses `account_type` and has
+-- no `description` column.
 --
 -- Safe to run more than once.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- 1. Missing GL accounts
+-- 1. GL accounts referenced by code but absent from production
 -- ---------------------------------------------------------------------------
-INSERT INTO gl_accounts (code, name, type, normal_balance, description) VALUES
-  ('1150', 'HST Receivable (ITC)', 'ASSET', 'DEBIT',
-   'Input tax credits on purchases, recoverable from CRA'),
-  ('2250', 'Registration Fees Payable', 'LIABILITY', 'CREDIT',
-   'MTO registration collected on the customer''s behalf - agency pass-through, not revenue'),
-  ('2350', 'Customer Deposits', 'LIABILITY', 'CREDIT',
-   'Deposits received before delivery. Unearned until the sale closes, so it is a liability distinct from Accrued Expenses (2300)'),
-  ('6450', 'Floorplan Fees', 'EXPENSE', 'DEBIT',
-   'Floorplan administration and curtailment fees'),
-  ('7950', 'Rounding Difference', 'EXPENSE', 'DEBIT',
-   'Sub-cent rounding residuals absorbed to keep entries balanced')
+INSERT INTO gl_accounts (code, name, account_type, normal_balance) VALUES
+  -- MTO registration collected for the customer: a pass-through, not revenue.
+  ('2250', 'Registration Fees Payable', 'LIABILITY', 'CREDIT'),
+  -- Deposits are unearned until delivery, so distinct from Accrued Expenses.
+  ('2350', 'Customer Deposits', 'LIABILITY', 'CREDIT'),
+  -- Lender admin/curtailment fees, separate from floorplan interest (5400).
+  ('6450', 'Floorplan Fees', 'EXPENSE', 'DEBIT'),
+  -- Absorbs sub-cent rounding so entries balance exactly. A material balance
+  -- here indicates a calculation defect worth investigating.
+  ('7950', 'Rounding Difference', 'EXPENSE', 'DEBIT')
 ON CONFLICT (code) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
@@ -39,7 +40,8 @@ ON CONFLICT (code) DO NOTHING;
 -- ---------------------------------------------------------------------------
 ALTER TABLE journal_entries
   ADD COLUMN IF NOT EXISTS reversed_by_entry_id UUID REFERENCES journal_entries(id),
-  ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
+  ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reversal_of_entry_id UUID REFERENCES journal_entries(id);
 
 -- Allow the REVERSED / VOID states used by the reversal flow.
 DO $$
@@ -67,7 +69,7 @@ END $$;
 -- 3 & 4. Repair corrupt entry numbers, then enforce uniqueness
 -- ---------------------------------------------------------------------------
 
--- Any row whose entry_number contains no digits (e.g. 'JE-00NaN') gets a
+-- Defensive: any row whose entry_number contains no digits gets a
 -- deterministic replacement above the current maximum.
 WITH corrupt AS (
   SELECT id,
@@ -130,7 +132,7 @@ DO $$
 BEGIN
   ALTER TABLE vehicles
     ADD CONSTRAINT vehicles_purchase_payment_method_check
-    CHECK (purchase_payment_method IN ('CASH', 'FLOORPLAN', 'ACCOUNTS_PAYABLE'));
+    CHECK (purchase_payment_method IN ('CASH', 'BANK', 'FLOORPLAN', 'ACCOUNTS_PAYABLE'));
 EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
@@ -142,10 +144,8 @@ ALTER TABLE vendors
   ADD COLUMN IF NOT EXISTS hst_registration_number TEXT;
 
 -- ---------------------------------------------------------------------------
--- 5b. Links from source documents to their journal entries
---
--- Without these the code cannot find the entry to reverse, so it fell back to
--- deleting and recreating history.
+-- 5b. Links from source documents to their journal entries, so the code can
+-- find the entry to reverse instead of guessing.
 -- ---------------------------------------------------------------------------
 ALTER TABLE vehicles
   ADD COLUMN IF NOT EXISTS purchase_journal_entry_id UUID
@@ -163,7 +163,8 @@ CREATE INDEX IF NOT EXISTS idx_vehicles_sale_je
 ALTER TABLE vehicle_expenses
   ADD COLUMN IF NOT EXISTS is_capitalized BOOLEAN NOT NULL DEFAULT FALSE;
 
--- Backfill from the expense types that are capitalizable.
+-- Backfill from the expense types that are capitalizable. Must stay in sync
+-- with CAPITALIZED_EXPENSE_ACCOUNTS in lib/accounting/accounts.ts.
 UPDATE vehicle_expenses
 SET is_capitalized = TRUE
 WHERE is_capitalized = FALSE
@@ -202,7 +203,7 @@ CREATE OR REPLACE VIEW v_trial_balance AS
 SELECT
   ga.code,
   ga.name,
-  ga.type,
+  ga.account_type,
   ga.normal_balance,
   COALESCE(SUM(li.debit), 0)  AS total_debit,
   COALESCE(SUM(li.credit), 0) AS total_credit,
@@ -216,7 +217,7 @@ LEFT JOIN journal_line_items li ON li.account_id = ga.id
 LEFT JOIN journal_entries je
        ON je.id = li.journal_entry_id
       AND je.status = 'POSTED'
-GROUP BY ga.id, ga.code, ga.name, ga.type, ga.normal_balance
+GROUP BY ga.id, ga.code, ga.name, ga.account_type, ga.normal_balance
 ORDER BY ga.code;
 
 COMMENT ON VIEW v_trial_balance IS
