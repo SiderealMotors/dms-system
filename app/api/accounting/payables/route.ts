@@ -1,10 +1,23 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextRequest, NextResponse } from "next/server"
+import {
+  ACCOUNTS,
+  debitAccountForExpenseType,
+  type AccountCode,
+} from "@/lib/accounting/accounts"
+import { sumMoney, toAmount } from "@/lib/accounting/money"
+import {
+  PostingError,
+  postJournalEntry,
+  resolveActingUserId,
+  reverseJournalEntry,
+  type PostingLine,
+} from "@/lib/accounting/posting"
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient()
   const { searchParams } = new URL(request.url)
-  
+
   const status = searchParams.get("status")
   const vehicleId = searchParams.get("vehicle_id")
 
@@ -21,7 +34,7 @@ export async function GET(request: NextRequest) {
   if (status) {
     query = query.eq("status", status)
   }
-  
+
   if (vehicleId) {
     query = query.eq("vehicle_id", vehicleId)
   }
@@ -38,211 +51,124 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
   const body = await request.json()
-  
-  const { data: { user } } = await supabase.auth.getUser()
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // Get user from public.users table
-  const { data: dbUser } = await supabase
-    .from("users")
-    .select("id, role")
-    .eq("auth_id", user.id)
-    .single()
-
-  if (!dbUser) {
+  const actingUserId = await resolveActingUserId(supabase)
+  if (!actingUserId) {
     return NextResponse.json({ error: "User not found" }, { status: 404 })
   }
 
   const { createJournalEntry, markAsPaid, ...billData } = body
 
-  // If marked as paid, skip AP entirely and just record as direct expense
-  if (markAsPaid) {
-    // Generate entry number
-    const { data: lastEntry } = await supabase
-      .from("journal_entries")
-      .select("entry_number")
-      .order("created_at", { ascending: false })
-      .limit(1)
+  const amount = toAmount(billData.amount)
+  if (amount <= 0) {
+    return NextResponse.json({ error: "Amount must be greater than zero" }, { status: 400 })
+  }
+
+  // Only claim an input tax credit when the vendor actually charged HST.
+  let taxAmount = toAmount(billData.tax_amount)
+  if (taxAmount > 0 && billData.vendor_id) {
+    const { data: vendor } = await supabase
+      .from("vendors")
+      .select("is_hst_registrant")
+      .eq("id", billData.vendor_id)
       .single()
-
-    const nextNum = lastEntry 
-      ? parseInt(lastEntry.entry_number.replace("JE-", "")) + 1 
-      : 1
-    const entryNumber = `JE-${String(nextNum).padStart(5, "0")}`
-
-    // Get GL account IDs for direct expense
-    const { data: accounts } = await supabase
-      .from("gl_accounts")
-      .select("id, code")
-      .in("code", ["1000", "1200", "1150", "5100"]) // Cash, Inventory, HST Receivable, Safety/Expense
-
-    const cashAccount = accounts?.find(a => a.code === "1000")
-    const inventoryAccount = accounts?.find(a => a.code === "1200")
-    const hstReceivableAccount = accounts?.find(a => a.code === "1150") // Sales Tax Receivable (Input Tax Credits)
-    const expenseAccount = accounts?.find(a => a.code === "5100") || inventoryAccount
-
-    if (cashAccount && expenseAccount) {
-      // Create journal entry directly (no AP involved)
-      const { data: journalEntry, error: jeError } = await supabase
-        .from("journal_entries")
-        .insert({
-          entry_number: entryNumber,
-          entry_date: billData.bill_date,
-          description: `Paid: ${billData.description}`,
-          status: "POSTED",
-          posted_at: new Date().toISOString(),
-          created_by: dbUser.id,
-        })
-        .select()
-        .single()
-
-      if (jeError) {
-        return NextResponse.json({ error: jeError.message }, { status: 500 })
-      }
-
-      if (journalEntry) {
-        // Create line items - Debit expense/inventory, Credit cash
-        const lineItems = [
-          {
-            journal_entry_id: journalEntry.id,
-            account_id: expenseAccount.id,
-            debit: billData.amount,
-            credit: 0,
-            memo: billData.description,
-          },
-        ]
-
-        // Add HST line if applicable (debit HST receivable for input tax credit)
-        if (billData.tax_amount > 0 && hstReceivableAccount) {
-          lineItems.push({
-            journal_entry_id: journalEntry.id,
-            account_id: hstReceivableAccount.id,
-            debit: billData.tax_amount,
-            credit: 0,
-            memo: "HST on purchase (input tax credit)",
-          })
-        }
-
-        // Credit Cash
-        lineItems.push({
-          journal_entry_id: journalEntry.id,
-          account_id: cashAccount.id,
-          debit: 0,
-          credit: billData.total_amount,
-          memo: "Cash payment",
-        })
-
-        await supabase.from("journal_line_items").insert(lineItems)
-
-        return NextResponse.json({ 
-          data: { 
-            journalEntry,
-            message: "Expense recorded directly (paid, no AP created)" 
-          } 
-        })
-      }
+    if (vendor && vendor.is_hst_registrant === false) {
+      return NextResponse.json(
+        {
+          error:
+            "This vendor is not registered for HST, so no input tax credit may be claimed. " +
+            "Clear the tax amount or correct the vendor's registration status.",
+        },
+        { status: 422 },
+      )
     }
-
-    return NextResponse.json({ error: "Failed to create direct expense entry" }, { status: 500 })
   }
 
-  // Standard flow: Always create journal entry first, then link AP to it
-  // This ensures AP records are never orphaned without journal entries
-  
-  // Generate entry number
-  const { data: lastEntry } = await supabase
-    .from("journal_entries")
-    .select("entry_number")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single()
+  // Recompute the total rather than trusting the client's arithmetic.
+  const totalAmount = sumMoney([amount, taxAmount])
 
-  const nextNum = lastEntry 
-    ? parseInt(lastEntry.entry_number.replace("JE-", "")) + 1 
-    : 1
-  const entryNumber = `JE-${String(nextNum).padStart(5, "0")}`
+  // Route the debit by expense type instead of dumping everything into a
+  // single account. Falls back to Vehicle Inventory for vehicle-linked bills.
+  const debitCode: AccountCode = billData.expense_type
+    ? debitAccountForExpenseType(billData.expense_type)
+    : billData.vehicle_id
+      ? ACCOUNTS.VEHICLE_INVENTORY
+      : ACCOUNTS.MISC_EXPENSE
 
-  // Get GL account IDs
-  const { data: accounts } = await supabase
-    .from("gl_accounts")
-    .select("id, code")
-    .in("code", ["2000", "1200", "1150"]) // AP, Inventory, HST Receivable
-
-  const apAccount = accounts?.find(a => a.code === "2000")
-  const inventoryAccount = accounts?.find(a => a.code === "1200")
-  const hstReceivableAccount = accounts?.find(a => a.code === "1150")
-
-  if (!apAccount || !inventoryAccount) {
-    return NextResponse.json({ error: "Required GL accounts not found" }, { status: 500 })
-  }
-
-  // Create journal entry first
-  const { data: journalEntry, error: jeError } = await supabase
-    .from("journal_entries")
-    .insert({
-      entry_number: entryNumber,
-      entry_date: billData.bill_date,
-      description: `Bill: ${billData.description}`,
-      status: "POSTED",
-      posted_at: new Date().toISOString(),
-      created_by: dbUser.id,
-    })
-    .select()
-    .single()
-
-  if (jeError || !journalEntry) {
-    return NextResponse.json({ error: jeError?.message || "Failed to create journal entry" }, { status: 500 })
-  }
-
-  // Create line items
-  const lineItems = [
-    {
-      journal_entry_id: journalEntry.id,
-      account_id: inventoryAccount.id,
-      debit: billData.amount,
-      credit: 0,
-      memo: "Vehicle cost / expense",
-    },
+  const lines: PostingLine[] = [
+    { code: debitCode, debit: amount, memo: billData.description || "Vendor bill" },
   ]
 
-  // Add HST line if applicable
-  if (billData.tax_amount > 0 && hstReceivableAccount) {
-    lineItems.push({
-      journal_entry_id: journalEntry.id,
-      account_id: hstReceivableAccount.id,
-      debit: billData.tax_amount,
-      credit: 0,
+  if (taxAmount > 0) {
+    lines.push({
+      code: ACCOUNTS.HST_RECEIVABLE,
+      debit: taxAmount,
       memo: "HST on purchase (input tax credit)",
     })
   }
 
-  // Credit AP
-  lineItems.push({
-    journal_entry_id: journalEntry.id,
-    account_id: apAccount.id,
-    debit: 0,
-    credit: billData.total_amount,
-    memo: "Amount owed to vendor",
-  })
+  // Paid immediately settles in cash; otherwise it sits in accounts payable.
+  lines.push(
+    markAsPaid
+      ? { code: ACCOUNTS.CASH, credit: totalAmount, memo: "Cash payment" }
+      : { code: ACCOUNTS.ACCOUNTS_PAYABLE, credit: totalAmount, memo: "Amount owed to vendor" },
+  )
 
-  await supabase.from("journal_line_items").insert(lineItems)
+  const billDate = billData.bill_date || new Date().toISOString().split("T")[0]
 
-  // Now create the bill in AP with the journal entry linked
+  let entry
+  try {
+    entry = await postJournalEntry(supabase, {
+      entryDate: billDate,
+      description: markAsPaid
+        ? `Paid: ${billData.description ?? ""}`.trim()
+        : `Bill: ${billData.description ?? ""}`.trim(),
+      lines,
+      createdBy: actingUserId,
+    })
+  } catch (err) {
+    if (err instanceof PostingError) {
+      return NextResponse.json({ error: err.message }, { status: 422 })
+    }
+    throw err
+  }
+
+  // A bill paid on the spot never enters the AP subledger, but it is still
+  // recorded so the expense and the ITC are on the books.
+  if (markAsPaid) {
+    return NextResponse.json({
+      data: {
+        journalEntry: { id: entry.id, entry_number: entry.entryNumber },
+        message: "Expense recorded as paid; no payable created.",
+      },
+    })
+  }
+
   const { data: bill, error: billError } = await supabase
     .from("accounts_payable")
     .insert({
       ...billData,
-      journal_entry_id: journalEntry.id,
+      bill_date: billDate,
+      amount,
+      tax_amount: taxAmount,
+      total_amount: totalAmount,
+      journal_entry_id: entry.id,
     })
     .select()
     .single()
 
   if (billError) {
-    // Rollback: delete the journal entry if bill creation fails
-    await supabase.from("journal_line_items").delete().eq("journal_entry_id", journalEntry.id)
-    await supabase.from("journal_entries").delete().eq("id", journalEntry.id)
+    await reverseJournalEntry(supabase, entry.id, {
+      reason: "Payable record could not be saved",
+      createdBy: actingUserId,
+    })
     return NextResponse.json({ error: billError.message }, { status: 500 })
   }
 

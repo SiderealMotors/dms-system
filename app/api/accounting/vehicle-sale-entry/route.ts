@@ -1,207 +1,185 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextRequest, NextResponse } from "next/server"
+import { ACCOUNTS } from "@/lib/accounting/accounts"
+import { calculateTax, sumMoney, toAmount } from "@/lib/accounting/money"
+import {
+  PostingError,
+  postJournalEntry,
+  resolveActingUserId,
+  type PostingLine,
+} from "@/lib/accounting/posting"
+import { getTaxRate } from "@/lib/accounting/tax"
+import { getCapitalizedInventoryCost } from "@/lib/accounting/vehicle-entries"
 
-interface VehicleSaleData {
-  vehicleId: string
-  sellingPrice: number
-  purchasePrice: number
-  safetyCost: number
-  safetyCharge: number
-  warrantyCost: number
-  warrantyCharge: number
-  floorplanInterest: number
-  gas: number
-  referralAmount: number
-  buyerName: string
-  stockNumber: string
-}
-
+/**
+ * Post the sale of a vehicle.
+ *
+ * Sale amounts come from the request; cost amounts are read from the database
+ * rather than trusted from the client, so COGS cannot be misstated by a caller.
+ *
+ * The entry has two balanced halves:
+ *
+ *   Revenue    Dr Accounts Receivable (gross incl. tax)
+ *              Cr Vehicle / Safety / Warranty / OMVIC revenue
+ *              Cr Registration Payable   (agency pass-through, not revenue)
+ *              Cr HST Payable            (tax collected, a liability)
+ *
+ *   Cost       Dr Cost of Vehicles Sold  (full capitalized cost)
+ *              Cr Vehicle Inventory      (same amount -- fully relieved)
+ *
+ * Period costs already expensed at acquisition -- floorplan interest, floorplan
+ * fees, fuel -- are deliberately NOT repeated here. The previous version
+ * re-debited them with no offsetting credit, which both double-counted the
+ * expense and left the entry permanently out of balance.
+ */
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
-  const body: VehicleSaleData = await request.json()
+  const body = await request.json()
 
-  // Get current user
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // Get GL account IDs
-  const { data: accounts } = await supabase
-    .from("gl_accounts")
-    .select("id, code")
-  
-  if (!accounts) {
-    return NextResponse.json({ error: "Could not fetch GL accounts" }, { status: 500 })
+  const actingUserId = await resolveActingUserId(supabase)
+
+  const vehicleId: string | undefined = body.vehicleId
+  if (!vehicleId) {
+    return NextResponse.json({ error: "vehicleId is required" }, { status: 400 })
   }
 
-  const getAccountId = (code: string) => accounts.find(a => a.code === code)?.id
-
-  // Generate entry number
-  const { count } = await supabase
-    .from("journal_entries")
-    .select("*", { count: "exact", head: true })
-  const entryNumber = `JE${String((count || 0) + 1).padStart(5, "0")}`
-
-  // Calculate totals
-  const totalRevenue = body.sellingPrice + body.safetyCharge + body.warrantyCharge
-  const totalCost = body.purchasePrice + body.safetyCost + body.warrantyCost + 
-                   body.floorplanInterest + body.gas + body.referralAmount
-
-  // Create journal entry for vehicle sale
-  const { data: entry, error: entryError } = await supabase
-    .from("journal_entries")
-    .insert({
-      entry_number: entryNumber,
-      entry_date: new Date().toISOString().split("T")[0],
-      description: `Vehicle Sale - ${body.stockNumber} to ${body.buyerName}`,
-      status: "POSTED",
-      created_by: user.id,
-      posted_at: new Date().toISOString(),
-    })
-    .select()
+  const { data: vehicle } = await supabase
+    .from("vehicles")
+    .select("id, year, make, model, stock_number, date_sold, sale_journal_entry_id")
+    .eq("id", vehicleId)
     .single()
 
-  if (entryError) {
-    return NextResponse.json({ error: entryError.message }, { status: 500 })
+  if (!vehicle) {
+    return NextResponse.json({ error: "Vehicle not found" }, { status: 404 })
   }
 
-  // Create line items
-  const lineItems = []
+  // Guard against posting the same sale twice.
+  if (vehicle.sale_journal_entry_id) {
+    return NextResponse.json(
+      {
+        error:
+          "This vehicle already has a posted sale entry. Reverse the existing entry before re-posting.",
+      },
+      { status: 409 },
+    )
+  }
 
-  // Debit: Cash/AR for total received
-  if (totalRevenue > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("1010"), // Bank Account - Operating
-      debit: totalRevenue,
-      credit: 0,
-      memo: "Cash received from vehicle sale",
+  const saleDate = body.saleDate || vehicle.date_sold || new Date().toISOString().split("T")[0]
+  const taxRate = getTaxRate(saleDate)
+
+  const sellingPrice = toAmount(body.sellingPrice)
+  const safetyCharge = toAmount(body.safetyCharge)
+  const warrantyCharge = toAmount(body.warrantyCharge)
+  const omvicFee = toAmount(body.omvicFee)
+  const registrationFee = toAmount(body.registrationFee)
+  const referralAmount = toAmount(body.referralAmount)
+
+  const taxableSubtotal = sumMoney([sellingPrice, safetyCharge, warrantyCharge, omvicFee])
+
+  if (taxableSubtotal <= 0 && registrationFee <= 0) {
+    return NextResponse.json({ error: "Sale has no billable amounts" }, { status: 400 })
+  }
+
+  const taxAmount = calculateTax(taxableSubtotal, taxRate)
+  const grossReceivable = sumMoney([taxableSubtotal, taxAmount, registrationFee])
+
+  // Full capitalized cost, read from the database. Relieving only
+  // purchase_price -- as the old code did -- stranded every other capitalized
+  // cost in inventory forever and understated COGS on every deal.
+  const capitalizedCost = await getCapitalizedInventoryCost(supabase, vehicleId)
+
+  const describeVehicle = `${vehicle.year ?? ""} ${vehicle.make ?? ""} ${vehicle.model ?? ""} (${vehicle.stock_number ?? ""})`.trim()
+  const description = `Vehicle sale: ${describeVehicle}${body.buyerName ? ` to ${body.buyerName}` : ""}`
+
+  const lines: PostingLine[] = []
+
+  // --- Revenue half -------------------------------------------------------
+  lines.push({
+    code: ACCOUNTS.ACCOUNTS_RECEIVABLE,
+    debit: grossReceivable,
+    memo: "Accounts receivable - customer",
+  })
+
+  if (sellingPrice > 0) {
+    lines.push({ code: ACCOUNTS.VEHICLE_SALES, credit: sellingPrice, memo: "Vehicle sales revenue" })
+  }
+  if (safetyCharge > 0) {
+    lines.push({ code: ACCOUNTS.SAFETY_REVENUE, credit: safetyCharge, memo: "Safety certification revenue" })
+  }
+  if (warrantyCharge > 0) {
+    lines.push({ code: ACCOUNTS.WARRANTY_REVENUE, credit: warrantyCharge, memo: "Warranty revenue" })
+  }
+  if (omvicFee > 0) {
+    lines.push({ code: ACCOUNTS.OMVIC_REVENUE, credit: omvicFee, memo: "OMVIC fee recovered" })
+  }
+  if (registrationFee > 0) {
+    lines.push({
+      code: ACCOUNTS.REGISTRATION_PAYABLE,
+      credit: registrationFee,
+      memo: "Registration collected on behalf of MTO (pass-through)",
+    })
+  }
+  if (taxAmount > 0) {
+    lines.push({ code: ACCOUNTS.HST_PAYABLE, credit: taxAmount, memo: "HST collected on sale" })
+  }
+
+  // --- Cost half ----------------------------------------------------------
+  if (capitalizedCost > 0) {
+    lines.push({
+      code: ACCOUNTS.COGS,
+      debit: capitalizedCost,
+      memo: "Cost of vehicle sold (full capitalized cost)",
+    })
+    lines.push({
+      code: ACCOUNTS.VEHICLE_INVENTORY,
+      credit: capitalizedCost,
+      memo: "Relieve vehicle from inventory",
     })
   }
 
-  // Credit: Vehicle Sales Revenue
-  if (body.sellingPrice > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("4000"), // Vehicle Sales Revenue
-      debit: 0,
-      credit: body.sellingPrice,
-      memo: "Vehicle selling price",
+  let entry
+  try {
+    entry = await postJournalEntry(supabase, {
+      entryDate: saleDate,
+      description,
+      lines,
+      createdBy: actingUserId,
     })
+  } catch (err) {
+    if (err instanceof PostingError) {
+      return NextResponse.json({ error: err.message }, { status: 422 })
+    }
+    throw err
   }
 
-  // Credit: Safety Charge Revenue
-  if (body.safetyCharge > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("4100"), // Safety Charge Revenue
-      debit: 0,
-      credit: body.safetyCharge,
-      memo: "Safety charge to customer",
+  await supabase
+    .from("vehicles")
+    .update({ sale_journal_entry_id: entry.id })
+    .eq("id", vehicleId)
+
+  // A referral paid to a third party is an expense with its own liability,
+  // not a reduction of sale revenue.
+  let referralEntryId: string | null = null
+  if (referralAmount > 0) {
+    const referralEntry = await postJournalEntry(supabase, {
+      entryDate: saleDate,
+      description: `Referral fee - ${vehicle.stock_number ?? describeVehicle}`,
+      lines: [
+        { code: ACCOUNTS.REFERRAL_FEES, debit: referralAmount, memo: "Referral fee expense" },
+        { code: ACCOUNTS.ACCOUNTS_PAYABLE, credit: referralAmount, memo: "Referral fee payable" },
+      ],
+      createdBy: actingUserId,
     })
+    referralEntryId = referralEntry.id
   }
 
-  // Credit: Warranty Revenue
-  if (body.warrantyCharge > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("4200"), // Warranty Revenue
-      debit: 0,
-      credit: body.warrantyCharge,
-      memo: "Warranty charge to customer",
-    })
-  }
-
-  // Debit: Cost of Vehicles Sold
-  if (body.purchasePrice > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("5000"), // Cost of Vehicles Sold
-      debit: body.purchasePrice,
-      credit: 0,
-      memo: "Vehicle purchase cost",
-    })
-  }
-
-  // Credit: Vehicle Inventory (reduce inventory)
-  if (body.purchasePrice > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("1200"), // Vehicle Inventory
-      debit: 0,
-      credit: body.purchasePrice,
-      memo: "Remove vehicle from inventory",
-    })
-  }
-
-  // Debit: Safety Costs
-  if (body.safetyCost > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("5100"), // Safety Costs
-      debit: body.safetyCost,
-      credit: 0,
-      memo: "Safety inspection cost",
-    })
-  }
-
-  // Debit: Warranty Costs
-  if (body.warrantyCost > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("5200"), // Warranty Costs
-      debit: body.warrantyCost,
-      credit: 0,
-      memo: "Warranty cost",
-    })
-  }
-
-  // Debit: Floorplan Interest
-  if (body.floorplanInterest > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("5400"), // Floorplan Interest
-      debit: body.floorplanInterest,
-      credit: 0,
-      memo: "Floorplan interest expense",
-    })
-  }
-
-  // Debit: Gas
-  if (body.gas > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("6900"), // Fuel & Gas
-      debit: body.gas,
-      credit: 0,
-      memo: "Gas expense",
-    })
-  }
-
-  // Debit: Referral Fee
-  if (body.referralAmount > 0) {
-    lineItems.push({
-      journal_entry_id: entry.id,
-      account_id: getAccountId("7000"), // Referral Fees
-      debit: body.referralAmount,
-      credit: 0,
-      memo: "Referral fee",
-    })
-  }
-
-  // Insert all line items
-  const { error: lineItemsError } = await supabase
-    .from("journal_line_items")
-    .insert(lineItems.filter(item => item.account_id))
-
-  if (lineItemsError) {
-    // Rollback
-    await supabase.from("journal_entries").delete().eq("id", entry.id)
-    return NextResponse.json({ error: lineItemsError.message }, { status: 500 })
-  }
-
-  // Fetch complete entry
   const { data: completeEntry } = await supabase
     .from("journal_entries")
     .select(`
@@ -211,5 +189,19 @@ export async function POST(request: NextRequest) {
     .eq("id", entry.id)
     .single()
 
-  return NextResponse.json({ data: completeEntry }, { status: 201 })
+  return NextResponse.json(
+    {
+      data: completeEntry,
+      summary: {
+        grossReceivable,
+        taxableSubtotal,
+        taxAmount,
+        registrationFee,
+        capitalizedCost,
+        grossProfit: sumMoney([taxableSubtotal, -capitalizedCost]),
+        referralEntryId,
+      },
+    },
+    { status: 201 },
+  )
 }

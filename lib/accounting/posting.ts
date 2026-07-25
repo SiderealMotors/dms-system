@@ -131,11 +131,23 @@ export function balanceLines(
 }
 
 /**
- * Allocate the next entry number.
+ * Extract the sequence number from a stored entry number.
  *
- * Tolerates the two legacy formats ("JE-00001" and "JE00001") and any
- * "JE-00NaN" rows produced by the old parseInt bug, by extracting digits
- * rather than trusting a fixed prefix length.
+ * Accepts only the two well-formed legacy shapes ("JE-00001" and "JE00001").
+ * Anything else -- including the "JE-00NaN" rows produced by the old parseInt
+ * bug -- returns null so it can never contribute to the sequence. A loose
+ * digit scan is deliberately avoided: "JE-2NaN5" would yield 2 and hand out a
+ * number that is already taken.
+ */
+export function parseEntrySequence(value: unknown): number | null {
+  const match = String(value ?? "").match(/^JE-?(\d{1,9})$/)
+  if (!match) return null
+  const n = Number.parseInt(match[1], 10)
+  return Number.isSafeInteger(n) ? n : null
+}
+
+/**
+ * Allocate the next entry number.
  */
 async function nextEntryNumber(supabase: SupabaseServerClient): Promise<string> {
   const { data, error } = await supabase
@@ -150,11 +162,8 @@ async function nextEntryNumber(supabase: SupabaseServerClient): Promise<string> 
 
   let max = 0
   for (const row of data ?? []) {
-    const raw = String(row.entry_number ?? "")
-    const digits = raw.match(/(\d+)/)
-    if (!digits) continue
-    const n = Number.parseInt(digits[1], 10)
-    if (Number.isFinite(n) && n > max) max = n
+    const n = parseEntrySequence(row.entry_number)
+    if (n !== null && n > max) max = n
   }
 
   return `JE-${String(max + 1).padStart(5, "0")}`

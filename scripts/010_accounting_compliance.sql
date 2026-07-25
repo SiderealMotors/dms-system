@@ -140,6 +140,37 @@ ALTER TABLE vendors
   ADD COLUMN IF NOT EXISTS hst_registration_number TEXT;
 
 -- ---------------------------------------------------------------------------
+-- 5b. Links from source documents to their journal entries
+--
+-- Without these the code cannot find the entry to reverse, so it fell back to
+-- deleting and recreating history.
+-- ---------------------------------------------------------------------------
+ALTER TABLE vehicles
+  ADD COLUMN IF NOT EXISTS purchase_journal_entry_id UUID
+    REFERENCES journal_entries(id),
+  ADD COLUMN IF NOT EXISTS sale_journal_entry_id UUID
+    REFERENCES journal_entries(id);
+
+CREATE INDEX IF NOT EXISTS idx_vehicles_purchase_je
+  ON vehicles(purchase_journal_entry_id);
+CREATE INDEX IF NOT EXISTS idx_vehicles_sale_je
+  ON vehicles(sale_journal_entry_id);
+
+-- Records whether an expense was capitalized into inventory, so COGS relief
+-- can be computed without re-deriving the classification rules.
+ALTER TABLE vehicle_expenses
+  ADD COLUMN IF NOT EXISTS is_capitalized BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Backfill from the expense types that are capitalizable.
+UPDATE vehicle_expenses
+SET is_capitalized = TRUE
+WHERE is_capitalized = FALSE
+  AND UPPER(COALESCE(expense_type, '')) IN (
+    'REPAIR', 'PARTS', 'DETAILING', 'INSPECTION',
+    'SAFETY', 'RECONDITIONING', 'TOWING', 'TRANSPORT'
+  );
+
+-- ---------------------------------------------------------------------------
 -- 6. Detection views
 --
 -- The application layer is the primary guarantee that debits equal credits,

@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
-
-const TAX_RATE = 0.13
+import {
+  ACCOUNTS,
+  creditAccountForPaymentMethod,
+  debitAccountForExpenseType,
+  isCapitalizedExpenseType,
+} from "@/lib/accounting/accounts"
+import { calculateTax, sumMoney, toAmount } from "@/lib/accounting/money"
+import {
+  PostingError,
+  postJournalEntry,
+  resolveActingUserId,
+  type PostingLine,
+} from "@/lib/accounting/posting"
+import { getTaxRate } from "@/lib/accounting/tax"
 
 // GET - Fetch all expenses for a vehicle
 export async function GET(
@@ -37,15 +49,8 @@ export async function POST(
   const { id: vehicleId } = await params
   const body = await request.json()
 
-  // Get current user
-  const { data: { user } } = await supabase.auth.getUser()
-  const { data: dbUser } = await supabase
-    .from("users")
-    .select("id")
-    .eq("auth_id", user?.id)
-    .single()
+  const actingUserId = await resolveActingUserId(supabase)
 
-  // Get vehicle info for journal entry description
   const { data: vehicle } = await supabase
     .from("vehicles")
     .select("year, make, model, stock_number")
@@ -56,129 +61,111 @@ export async function POST(
     return NextResponse.json({ error: "Vehicle not found" }, { status: 404 })
   }
 
-  // Calculate amounts
-  const amount = Number(body.amount) || 0
-  const isTaxable = body.is_taxable !== false
-  const taxAmount = isTaxable ? amount * TAX_RATE : 0
-  const totalAmount = amount + taxAmount
+  const expenseDate = body.expense_date || new Date().toISOString().split("T")[0]
+  const amount = toAmount(body.amount)
 
-  // Create journal entry first (assume paid in cash)
-  const { data: lastEntry } = await supabase
-    .from("journal_entries")
-    .select("entry_number")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single()
-
-  const nextNum = lastEntry 
-    ? parseInt(lastEntry.entry_number.replace("JE-", "")) + 1 
-    : 1
-  const entryNumber = `JE-${String(nextNum).padStart(5, "0")}`
-
-  // Get GL account IDs
-  const { data: accounts } = await supabase
-    .from("gl_accounts")
-    .select("id, code")
-    .in("code", ["1000", "1200", "1150", "5100"]) // Cash, Inventory, HST Receivable, Operating Expenses
-
-  const cashAccount = accounts?.find(a => a.code === "1000")
-  const inventoryAccount = accounts?.find(a => a.code === "1200")
-  const hstReceivableAccount = accounts?.find(a => a.code === "1150")
-  const expenseAccount = accounts?.find(a => a.code === "5100")
-
-  if (!cashAccount || !inventoryAccount) {
-    return NextResponse.json({ error: "Required GL accounts not found" }, { status: 500 })
+  if (amount <= 0) {
+    return NextResponse.json({ error: "Amount must be greater than zero" }, { status: 400 })
   }
 
-  // Determine which account to debit based on expense type
-  // Inventory-related expenses go to Inventory, others go to Operating Expenses
-  const inventoryExpenseTypes = ['REPAIR', 'PARTS', 'DETAILING', 'INSPECTION']
-  const debitAccount = inventoryExpenseTypes.includes(body.expense_type) 
-    ? inventoryAccount 
-    : (expenseAccount || inventoryAccount)
-
-  // Create journal entry
-  const { data: journalEntry, error: jeError } = await supabase
-    .from("journal_entries")
-    .insert({
-      entry_number: entryNumber,
-      entry_date: body.expense_date || new Date().toISOString().split("T")[0],
-      description: `Vehicle Expense (${body.expense_type}): ${vehicle.year} ${vehicle.make} ${vehicle.model} (${vehicle.stock_number}) - ${body.description}`,
-      status: "POSTED",
-      posted_at: new Date().toISOString(),
-      created_by: dbUser?.id || null,
-    })
-    .select()
-    .single()
-
-  if (jeError || !journalEntry) {
-    return NextResponse.json({ error: jeError?.message || "Failed to create journal entry" }, { status: 500 })
+  // An input tax credit is only claimable when the supplier charged HST. A
+  // non-registrant supplier means there is no recoverable tax.
+  let hstClaimable = body.is_taxable !== false
+  if (hstClaimable && body.vendor_id) {
+    const { data: vendor } = await supabase
+      .from("vendors")
+      .select("is_hst_registrant")
+      .eq("id", body.vendor_id)
+      .single()
+    if (vendor && vendor.is_hst_registrant === false) {
+      hstClaimable = false
+    }
   }
 
-  // Create line items
-  const lineItems: Array<{
-    journal_entry_id: string
-    account_id: string
-    debit: number
-    credit: number
-    memo: string
-  }> = []
+  const taxRate = getTaxRate(expenseDate)
+  const taxAmount = calculateTax(amount, taxRate, hstClaimable)
+  const totalAmount = sumMoney([amount, taxAmount])
 
-  // Debit expense/inventory account
-  lineItems.push({
-    journal_entry_id: journalEntry.id,
-    account_id: debitAccount.id,
-    debit: amount,
-    credit: 0,
-    memo: `${body.expense_type}: ${body.description}`,
-  })
+  // Capitalizable costs bring the unit to sellable condition and belong in
+  // inventory; everything else is a period cost in its own expense account.
+  const debitCode = debitAccountForExpenseType(body.expense_type)
+  const creditCode = creditAccountForPaymentMethod(body.payment_method)
 
-  // Debit HST Receivable if taxable
-  if (taxAmount > 0 && hstReceivableAccount) {
-    lineItems.push({
-      journal_entry_id: journalEntry.id,
-      account_id: hstReceivableAccount.id,
+  const lines: PostingLine[] = [
+    {
+      code: debitCode,
+      debit: amount,
+      memo: `${body.expense_type}: ${body.description ?? ""}`.trim(),
+    },
+  ]
+
+  if (taxAmount > 0) {
+    lines.push({
+      code: ACCOUNTS.HST_RECEIVABLE,
       debit: taxAmount,
-      credit: 0,
       memo: "HST on expense (input tax credit)",
     })
   }
 
-  // Credit Cash
-  lineItems.push({
-    journal_entry_id: journalEntry.id,
-    account_id: cashAccount.id,
-    debit: 0,
+  lines.push({
+    code: creditCode,
     credit: totalAmount,
-    memo: "Cash payment for vehicle expense",
+    memo:
+      creditCode === ACCOUNTS.ACCOUNTS_PAYABLE
+        ? "Payable to vendor"
+        : creditCode === ACCOUNTS.FLOORPLAN_PAYABLE
+          ? "Charged to floorplan"
+          : "Payment for vehicle expense",
   })
 
-  await supabase.from("journal_line_items").insert(lineItems)
+  const describeVehicle = `${vehicle.year ?? ""} ${vehicle.make ?? ""} ${vehicle.model ?? ""} (${vehicle.stock_number ?? ""})`.trim()
 
-  // Create the expense record
+  let journalEntryId: string | null = null
+  try {
+    const entry = await postJournalEntry(supabase, {
+      entryDate: expenseDate,
+      description: `Vehicle expense (${body.expense_type}): ${describeVehicle} - ${body.description ?? ""}`.trim(),
+      lines,
+      createdBy: actingUserId,
+    })
+    journalEntryId = entry.id
+  } catch (err) {
+    if (err instanceof PostingError) {
+      return NextResponse.json({ error: err.message }, { status: 422 })
+    }
+    throw err
+  }
+
   const { data: expense, error: expenseError } = await supabase
     .from("vehicle_expenses")
     .insert({
       vehicle_id: vehicleId,
-      expense_date: body.expense_date || new Date().toISOString().split("T")[0],
+      expense_date: expenseDate,
       expense_type: body.expense_type,
       description: body.description,
       notes: body.notes || null,
-      amount: amount,
+      amount,
       tax_amount: taxAmount,
       total_amount: totalAmount,
-      is_taxable: isTaxable,
+      is_taxable: hstClaimable,
+      is_capitalized: isCapitalizedExpenseType(body.expense_type),
       vendor_id: body.vendor_id || null,
-      journal_entry_id: journalEntry.id,
-      created_by: dbUser?.id || null,
+      journal_entry_id: journalEntryId,
+      created_by: actingUserId,
     })
     .select()
     .single()
 
   if (expenseError) {
-    // Rollback journal entry if expense creation fails
-    await supabase.from("journal_line_items").delete().eq("journal_entry_id", journalEntry.id)
-    await supabase.from("journal_entries").delete().eq("id", journalEntry.id)
+    // The expense record failed, so the entry it justified must not stand.
+    // Reverse rather than delete to preserve the audit trail.
+    const { reverseJournalEntry } = await import("@/lib/accounting/posting")
+    if (journalEntryId) {
+      await reverseJournalEntry(supabase, journalEntryId, {
+        reason: "Expense record could not be saved",
+        createdBy: actingUserId,
+      })
+    }
     return NextResponse.json({ error: expenseError.message }, { status: 500 })
   }
 
