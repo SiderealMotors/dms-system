@@ -7,9 +7,10 @@
 --      NOT touched here. An earlier draft of this migration wrongly assumed it
 --      was missing.
 --   2. Adds reversal columns so posted entries are reversed, never deleted.
---   3. Enforces UNIQUE on entry_number so concurrent posts cannot collide.
---      (No duplicates exist today; this is preventative.)
---   4. Repairs any entry_number containing no digits, defensively.
+--   3. Repairs any entry_number containing no digits, defensively.
+--      NOTE: UNIQUE (entry_number) ALREADY EXISTS in production as
+--      journal_entries_entry_number_key. An earlier draft claimed it was
+--      missing and that duplicates existed; both were wrong. Nothing to add.
 --   5. Adds purchase funding method + HST-registrant tracking, and links from
 --      source documents to their journal entries.
 --   6. Adds balance / trial-balance views so imbalances are detectable.
@@ -43,30 +44,29 @@ ALTER TABLE journal_entries
   ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS reversal_of_entry_id UUID REFERENCES journal_entries(id);
 
--- Allow the REVERSED / VOID states used by the reversal flow.
+-- status is the ENUM journal_status, which ships with only DRAFT and POSTED.
+-- The reversal flow needs REVERSED.
+--
+-- Adding an enum value must happen OUTSIDE a transaction, so it lives in
+-- scripts/010a_journal_status_enum.sql and must be run FIRST. This file only
+-- verifies it was applied, and fails loudly if it wasn't.
 DO $$
-DECLARE
-  con_name TEXT;
 BEGIN
-  SELECT conname INTO con_name
-  FROM pg_constraint
-  WHERE conrelid = 'journal_entries'::regclass
-    AND contype = 'c'
-    AND pg_get_constraintdef(oid) ILIKE '%status%';
-
-  IF con_name IS NOT NULL THEN
-    EXECUTE format('ALTER TABLE journal_entries DROP CONSTRAINT %I', con_name);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_enum e
+    JOIN pg_type t ON t.oid = e.enumtypid
+    WHERE t.typname = 'journal_status' AND e.enumlabel = 'REVERSED'
+  ) THEN
+    RAISE EXCEPTION
+      'journal_status is missing the REVERSED value. Run scripts/010a_journal_status_enum.sql first.';
   END IF;
-
-  ALTER TABLE journal_entries
-    ADD CONSTRAINT journal_entries_status_check
-    CHECK (status IN ('DRAFT', 'POSTED', 'REVERSED', 'VOID'));
-EXCEPTION
-  WHEN duplicate_object THEN NULL;
 END $$;
 
 -- ---------------------------------------------------------------------------
--- 3 & 4. Repair corrupt entry numbers, then enforce uniqueness
+-- 3. Repair corrupt entry numbers.
+--
+-- UNIQUE (entry_number) already exists, so there is no constraint to add and
+-- duplicates cannot be present. These statements are purely defensive.
 -- ---------------------------------------------------------------------------
 
 -- Defensive: any row whose entry_number contains no digits gets a
@@ -90,35 +90,6 @@ SET entry_number = 'JE-' || LPAD((cm.max_num + c.rn)::TEXT, 5, '0')
 FROM corrupt c, current_max cm
 WHERE je.id = c.id;
 
--- De-duplicate any repeated entry numbers before adding the constraint,
--- keeping the earliest row unchanged.
-WITH dupes AS (
-  SELECT id,
-         ROW_NUMBER() OVER (PARTITION BY entry_number ORDER BY created_at) AS rn
-  FROM journal_entries
-),
-current_max AS (
-  SELECT COALESCE(
-    MAX((regexp_match(entry_number, '([0-9]+)'))[1]::BIGINT), 0
-  ) AS max_num
-  FROM journal_entries
-  WHERE entry_number ~ '[0-9]'
-)
-UPDATE journal_entries je
-SET entry_number = 'JE-' || LPAD((cm.max_num + d.rn)::TEXT, 5, '0')
-FROM dupes d, current_max cm
-WHERE je.id = d.id
-  AND d.rn > 1;
-
-DO $$
-BEGIN
-  ALTER TABLE journal_entries
-    ADD CONSTRAINT journal_entries_entry_number_key UNIQUE (entry_number);
-EXCEPTION
-  WHEN duplicate_table THEN NULL;
-  WHEN duplicate_object THEN NULL;
-END $$;
-
 -- ---------------------------------------------------------------------------
 -- 5. Purchase funding method and HST-registrant tracking
 -- ---------------------------------------------------------------------------
@@ -128,11 +99,31 @@ ALTER TABLE vehicles
   ADD COLUMN IF NOT EXISTS purchase_hst_applicable BOOLEAN
     NOT NULL DEFAULT TRUE;
 
+-- Seed the new column from the existing free-text payment_method so the one
+-- vehicle already on file keeps its real funding source instead of silently
+-- defaulting to CASH. Live data uses 'BANK_DRAFT'.
+UPDATE vehicles
+SET purchase_payment_method = CASE UPPER(COALESCE(payment_method, ''))
+  WHEN 'CASH'          THEN 'CASH'
+  WHEN 'BANK_DRAFT'    THEN 'BANK_DRAFT'
+  WHEN 'BANK'          THEN 'BANK_DRAFT'
+  WHEN 'CHEQUE'        THEN 'BANK_DRAFT'
+  WHEN 'CHECK'         THEN 'BANK_DRAFT'
+  WHEN 'WIRE'          THEN 'BANK_DRAFT'
+  WHEN 'EFT'           THEN 'BANK_DRAFT'
+  WHEN 'FLOORPLAN'     THEN 'FLOORPLAN'
+  WHEN 'CREDIT'        THEN 'ACCOUNTS_PAYABLE'
+  WHEN 'TERMS'         THEN 'ACCOUNTS_PAYABLE'
+  ELSE 'BANK_DRAFT'
+END
+WHERE purchase_payment_method = 'CASH';
+
 DO $$
 BEGIN
   ALTER TABLE vehicles
     ADD CONSTRAINT vehicles_purchase_payment_method_check
-    CHECK (purchase_payment_method IN ('CASH', 'BANK', 'FLOORPLAN', 'ACCOUNTS_PAYABLE'));
+    CHECK (purchase_payment_method IN
+      ('CASH', 'BANK_DRAFT', 'FLOORPLAN', 'ACCOUNTS_PAYABLE'));
 EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
@@ -147,6 +138,8 @@ ALTER TABLE vendors
 -- 5b. Links from source documents to their journal entries, so the code can
 -- find the entry to reverse instead of guessing.
 -- ---------------------------------------------------------------------------
+-- purchase_journal_entry_id already exists in production (and is populated for
+-- the one vehicle on file); only sale_journal_entry_id is genuinely new.
 ALTER TABLE vehicles
   ADD COLUMN IF NOT EXISTS purchase_journal_entry_id UUID
     REFERENCES journal_entries(id),
