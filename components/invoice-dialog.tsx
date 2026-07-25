@@ -22,10 +22,12 @@ import {
 import { Checkbox } from "@/components/ui/checkbox"
 import { Loader2 } from "lucide-react"
 import { formatCurrency } from "@/lib/utils"
+import { DEFAULT_TAX_RATE } from "@/lib/accounting/tax"
 import type { Customer, Vehicle } from "@/lib/types"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
-const TAX_RATE = 0.13 // Ontario HST
+// Ontario HST, shared with the posting engine.
+const TAX_RATE = DEFAULT_TAX_RATE
 
 interface InvoiceDialogProps {
   open: boolean

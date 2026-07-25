@@ -22,6 +22,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Loader2, Plus, Trash2, AlertCircle, CheckCircle } from "lucide-react"
 import { formatCurrency } from "@/lib/utils"
+import { ACCOUNTS } from "@/lib/accounting/accounts"
+import { roundMoney, sumMoney, calculateTax } from "@/lib/accounting/money"
+import { getTaxRate } from "@/lib/accounting/tax"
 import type { GLAccount, JournalEntry, Vehicle } from "@/lib/types"
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
@@ -164,26 +167,30 @@ export function JournalEntryDialog({ open, onOpenChange, onSuccess, entry, vehic
     }
 
     // Template-based auto-population
-    const cashAccount = getAccountByCode("1000")
-    const apAccount = getAccountByCode("2000")
-    const inventoryAccount = getAccountByCode("1200")
-    const revenueAccount = getAccountByCode("4000")
-    const cogsAccount = getAccountByCode("5000")
-    const safetyExpenseAccount = getAccountByCode("5100")
-    const warrantyExpenseAccount = getAccountByCode("5200")
-    const floorplanAccount = getAccountByCode("5400")
-    const rentAccount = getAccountByCode("6200")
-    const utilitiesAccount = getAccountByCode("6300")
-    const advertisingAccount = getAccountByCode("6500")
-    const salariesAccount = getAccountByCode("6000")
-    const commissionsAccount = getAccountByCode("6100")
-    const referralAccount = getAccountByCode("7000")
-    const gasAccount = getAccountByCode("6900")
-    const officeAccount = getAccountByCode("6600")
-    const insuranceAccount = getAccountByCode("6400")
-    const ownerEquityAccount = getAccountByCode("3000")
-    const ownerDrawsAccount = getAccountByCode("3200")
-    const customerDepositsAccount = getAccountByCode("2300")
+    // Resolved from the canonical map. Previously several of these used codes
+    // that mean something else in the chart of accounts -- e.g. "1200" is
+    // Parts Inventory, not Vehicle Inventory, and "7000" is Repairs &
+    // Maintenance, not Referral Fees.
+    const cashAccount = getAccountByCode(ACCOUNTS.CASH)
+    const apAccount = getAccountByCode(ACCOUNTS.ACCOUNTS_PAYABLE)
+    const inventoryAccount = getAccountByCode(ACCOUNTS.VEHICLE_INVENTORY)
+    const revenueAccount = getAccountByCode(ACCOUNTS.VEHICLE_SALES)
+    const cogsAccount = getAccountByCode(ACCOUNTS.COGS)
+    const safetyExpenseAccount = getAccountByCode(ACCOUNTS.SAFETY_COST)
+    const warrantyExpenseAccount = getAccountByCode(ACCOUNTS.WARRANTY_COST)
+    const floorplanAccount = getAccountByCode(ACCOUNTS.FLOORPLAN_INTEREST)
+    const referralAccount = getAccountByCode(ACCOUNTS.REFERRAL_FEES)
+    const gasAccount = getAccountByCode(ACCOUNTS.FUEL_EXPENSE)
+    const rentAccount = getAccountByCode(ACCOUNTS.RENT)
+    const utilitiesAccount = getAccountByCode(ACCOUNTS.UTILITIES)
+    const advertisingAccount = getAccountByCode(ACCOUNTS.ADVERTISING)
+    const salariesAccount = getAccountByCode(ACCOUNTS.SALARIES_WAGES)
+    const commissionsAccount = getAccountByCode(ACCOUNTS.COMMISSIONS)
+    const officeAccount = getAccountByCode(ACCOUNTS.OFFICE_EXPENSE)
+    const insuranceAccount = getAccountByCode(ACCOUNTS.INSURANCE)
+    const ownerEquityAccount = getAccountByCode(ACCOUNTS.OWNER_CAPITAL)
+    const ownerDrawsAccount = getAccountByCode(ACCOUNTS.OWNER_DRAWS)
+    const customerDepositsAccount = getAccountByCode(ACCOUNTS.CUSTOMER_DEPOSITS)
 
     let newLines: LineItem[] = []
     let desc = ""
@@ -317,48 +324,57 @@ export function JournalEntryDialog({ open, onOpenChange, onSuccess, entry, vehic
     const selectedVehicle = soldVehicles.find((v) => v.id === vehicleId)
     if (!selectedVehicle) return
 
-    const cashAccount = getAccountByCode("1000")
-    const revenueAccount = getAccountByCode("4000")
-    const safetyRevenueAccount = getAccountByCode("4100")
-    const warrantyRevenueAccount = getAccountByCode("4200")
-    const cogsAccount = getAccountByCode("5000")
-    const inventoryAccount = getAccountByCode("1200")
-    const hstAccount = getAccountByCode("2200")
+    const cashAccount = getAccountByCode(ACCOUNTS.CASH)
+    const revenueAccount = getAccountByCode(ACCOUNTS.VEHICLE_SALES)
+    const safetyRevenueAccount = getAccountByCode(ACCOUNTS.SAFETY_REVENUE)
+    const warrantyRevenueAccount = getAccountByCode(ACCOUNTS.WARRANTY_REVENUE)
+    const omvicRevenueAccount = getAccountByCode(ACCOUNTS.OMVIC_REVENUE)
+    const cogsAccount = getAccountByCode(ACCOUNTS.COGS)
+    const inventoryAccount = getAccountByCode(ACCOUNTS.VEHICLE_INVENTORY)
+    const hstAccount = getAccountByCode(ACCOUNTS.HST_PAYABLE)
+    const referralAccount = getAccountByCode(ACCOUNTS.REFERRAL_FEES)
 
-    // Calculate values
-    const sellingPrice = selectedVehicle.selling_price || 0
-    const safetyCharge = selectedVehicle.safety_charge || 0
-    const warrantyCharge = selectedVehicle.warranty_charge || 0
-    const omvicFee = selectedVehicle.omvic_fee || 0
-    const subtotal = sellingPrice + safetyCharge + warrantyCharge + omvicFee
-    const hst = subtotal * 0.13
-    const totalReceived = subtotal + hst
+    // Revenue side. Each charge is credited to its own revenue account so the
+    // income statement shows the real mix rather than one lump.
+    const sellingPrice = roundMoney(selectedVehicle.selling_price || 0)
+    const safetyCharge = roundMoney(selectedVehicle.safety_charge || 0)
+    const warrantyCharge = roundMoney(selectedVehicle.warranty_charge || 0)
+    const omvicFee = roundMoney(selectedVehicle.omvic_fee || 0)
+    const subtotal = sumMoney([sellingPrice, safetyCharge, warrantyCharge, omvicFee])
+    const hst = calculateTax(subtotal, getTaxRate(selectedVehicle.date_sold))
+    const totalReceived = sumMoney([subtotal, hst])
 
-    // Cost of goods sold (what we paid for the vehicle)
-    const purchasePrice = selectedVehicle.purchase_price || 0
-    const purchaseTax = purchasePrice * 0.13
-    const safetyCost = (selectedVehicle.safety_cost || 0) * 1.13
-    const warrantyCost = (selectedVehicle.warranty_cost || 0) * 1.13
-    const floorplanCost = selectedVehicle.floorplan_interest_cost || 0
-    const gasCost = (selectedVehicle.gas || 0) * 1.13
-    const referralAmount = selectedVehicle.referral_amount || 0
-    const totalCOGS = purchasePrice + purchaseTax + safetyCost + warrantyCost + floorplanCost + gasCost + referralAmount
+    // COGS relieves the capitalized carrying cost. Recoverable HST is an input
+    // tax credit, not a cost, so it is excluded here -- capitalizing it would
+    // overstate COGS and understate profit on every deal.
+    const purchasePrice = roundMoney(selectedVehicle.purchase_price || 0)
+    const miscCost = roundMoney(selectedVehicle.miscellaneous_cost || 0)
+    const safetyCost = roundMoney(selectedVehicle.safety_cost || 0)
+    const capitalizedCost = sumMoney([purchasePrice, miscCost, safetyCost])
+
+    // A referral paid out is a selling expense, not part of inventory cost.
+    const referralAmount = roundMoney(selectedVehicle.referral_amount || 0)
 
     const newLines: LineItem[] = [
-      // Debit: Cash (what we received)
-      { id: crypto.randomUUID(), account_id: cashAccount?.id || "", debit: totalReceived, credit: 0, memo: `Cash received for ${selectedVehicle.year} ${selectedVehicle.make} ${selectedVehicle.model}` },
-      // Credit: Vehicle Sales Revenue
+      // Debit: Cash for the full tax-inclusive proceeds.
+      { id: crypto.randomUUID(), account_id: cashAccount?.id || "", debit: totalReceived, credit: 0, memo: `Proceeds for ${selectedVehicle.year} ${selectedVehicle.make} ${selectedVehicle.model}` },
+      // Credit: revenue by component.
       { id: crypto.randomUUID(), account_id: revenueAccount?.id || "", debit: 0, credit: sellingPrice, memo: "Vehicle sale price" },
-      // Credit: Safety Charge Revenue (if any)
       ...(safetyCharge > 0 ? [{ id: crypto.randomUUID(), account_id: safetyRevenueAccount?.id || "", debit: 0, credit: safetyCharge, memo: "Safety charge to customer" }] : []),
-      // Credit: Warranty Revenue (if any)
       ...(warrantyCharge > 0 ? [{ id: crypto.randomUUID(), account_id: warrantyRevenueAccount?.id || "", debit: 0, credit: warrantyCharge, memo: "Warranty charge to customer" }] : []),
-      // Credit: HST Payable
-      { id: crypto.randomUUID(), account_id: hstAccount?.id || "", debit: 0, credit: hst, memo: "HST collected" },
-      // Debit: Cost of Goods Sold
-      { id: crypto.randomUUID(), account_id: cogsAccount?.id || "", debit: totalCOGS, credit: 0, memo: "Cost of vehicle sold" },
-      // Credit: Inventory (remove vehicle from inventory)
-      { id: crypto.randomUUID(), account_id: inventoryAccount?.id || "", debit: 0, credit: totalCOGS, memo: "Vehicle removed from inventory" },
+      ...(omvicFee > 0 ? [{ id: crypto.randomUUID(), account_id: omvicRevenueAccount?.id || "", debit: 0, credit: omvicFee, memo: "OMVIC fee to customer" }] : []),
+      // Credit: HST collected becomes a liability owed to CRA.
+      ...(hst > 0 ? [{ id: crypto.randomUUID(), account_id: hstAccount?.id || "", debit: 0, credit: hst, memo: "HST collected" }] : []),
+      // COGS / inventory relief at capitalized cost.
+      { id: crypto.randomUUID(), account_id: cogsAccount?.id || "", debit: capitalizedCost, credit: 0, memo: "Cost of vehicle sold" },
+      { id: crypto.randomUUID(), account_id: inventoryAccount?.id || "", debit: 0, credit: capitalizedCost, memo: "Vehicle removed from inventory" },
+      // Referral paid out, expensed and settled in cash.
+      ...(referralAmount > 0
+        ? [
+            { id: crypto.randomUUID(), account_id: referralAccount?.id || "", debit: referralAmount, credit: 0, memo: "Referral fee expense" },
+            { id: crypto.randomUUID(), account_id: cashAccount?.id || "", debit: 0, credit: referralAmount, memo: "Referral fee paid" },
+          ]
+        : []),
     ]
 
     setLineItems(newLines)

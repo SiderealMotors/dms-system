@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Loader2, Search, Car, DollarSign, TrendingUp, Calculator, Plus, Trash2, RefreshCw, CheckCircle, AlertCircle } from "lucide-react"
 import { formatCurrency, calculateLotDays, formatDate } from "@/lib/utils"
+import { DEFAULT_TAX_RATE } from "@/lib/accounting/tax"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { AddExpenseDialog } from "@/components/add-expense-dialog"
 import type { Vehicle, VehicleStatus, User } from "@/lib/types"
@@ -41,8 +42,9 @@ interface VehicleExpense {
 
 const fetcher = (url: string) => fetch(url).then((res) => res.json())
 
-// Ontario HST Tax Rate
-const TAX_RATE = 0.13
+// Ontario HST. Shared with the posting engine so the figures previewed here
+// cannot drift from what actually gets journalled.
+const TAX_RATE = DEFAULT_TAX_RATE
 
 interface VehicleDialogProps {
   open: boolean
@@ -340,7 +342,13 @@ export function VehicleDialog({ open, onClose, vehicle }: VehicleDialogProps) {
   }
 
   const handleDeleteExpense = async (expenseId: string) => {
-    if (!vehicle || !confirm("Are you sure you want to delete this expense? The associated journal entry will also be deleted.")) return
+    if (
+      !vehicle ||
+      !confirm(
+        "Remove this expense? Its journal entry will be reversed with a dated offsetting entry — both remain in the ledger for audit purposes.",
+      )
+    )
+      return
     setDeletingExpenseId(expenseId)
     try {
       await fetch(`/api/vehicles/${vehicle.id}/expenses/${expenseId}`, { method: "DELETE" })

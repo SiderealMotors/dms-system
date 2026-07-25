@@ -26,6 +26,8 @@ INSERT INTO gl_accounts (code, name, type, normal_balance, description) VALUES
    'Input tax credits on purchases, recoverable from CRA'),
   ('2250', 'Registration Fees Payable', 'LIABILITY', 'CREDIT',
    'MTO registration collected on the customer''s behalf - agency pass-through, not revenue'),
+  ('2350', 'Customer Deposits', 'LIABILITY', 'CREDIT',
+   'Deposits received before delivery. Unearned until the sale closes, so it is a liability distinct from Accrued Expenses (2300)'),
   ('6450', 'Floorplan Fees', 'EXPENSE', 'DEBIT',
    'Floorplan administration and curtailment fees'),
   ('7950', 'Rounding Difference', 'EXPENSE', 'DEBIT',

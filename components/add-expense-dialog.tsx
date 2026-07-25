@@ -10,11 +10,13 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Loader2 } from "lucide-react"
+import { DEFAULT_TAX_RATE } from "@/lib/accounting/tax"
 import type { Vendor } from "@/lib/types"
 
 const fetcher = (url: string) => fetch(url).then(res => res.json())
 
-const TAX_RATE = 0.13
+// Ontario HST, shared with the posting engine.
+const TAX_RATE = DEFAULT_TAX_RATE
 
 const EXPENSE_TYPES = [
   { value: "REPAIR", label: "Repair / Mechanical Work" },
