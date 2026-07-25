@@ -52,15 +52,19 @@ const CAPITALIZED_COMPONENTS = [
     account: ACCOUNTS.VEHICLE_INVENTORY,
     taxable: true,
   },
-  {
-    field: "warranty_cost",
-    memo: "Warranty cost",
-    account: ACCOUNTS.VEHICLE_INVENTORY_RECONDITIONING,
-    taxable: true,
-  },
 ] as const
 
 const PERIOD_COMPONENTS = [
+  {
+    // The warranty is a third-party contract bought FOR the customer, so its
+    // cost belongs against warranty revenue -- not capitalized into the
+    // vehicle. Capitalizing it would inflate vehicle COGS and misstate the
+    // margin on the vehicle versus the warranty.
+    field: "warranty_cost",
+    memo: "Warranty contract cost",
+    account: ACCOUNTS.WARRANTY_COSTS,
+    taxable: true,
+  },
   {
     field: "floorplan_interest_cost",
     memo: "Floorplan interest",
@@ -252,7 +256,7 @@ export async function getCapitalizedInventoryCost(
 
   const { data: vehicle } = await supabase
     .from("vehicles")
-    .select("purchase_price, miscellaneous_cost, safety_cost, gas, warranty_cost")
+    .select("purchase_price, miscellaneous_cost, safety_cost, gas")
     .eq("id", vehicleId)
     .single()
 

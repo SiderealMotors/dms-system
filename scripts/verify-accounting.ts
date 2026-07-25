@@ -79,11 +79,15 @@ console.log("\n=== Scenario 1: the original failing purchase (Stock #12 shape) =
 
   assertBalanced("Scenario 1", lines)
 
-  // Capitalized: 20000 + 200 + 500 + 80 + 300 = 21080
-  check("capitalized cost is 21,080.00", t.capitalizedCost === 21080, `got ${t.capitalizedCost}`)
-  // Period: 150 + 50 = 200
-  check("period cost is 200.00", t.periodCost === 200, `got ${t.periodCost}`)
-  // Taxable base excludes interest and fees (exempt financial services)
+  // Capitalized: 20000 purchase + 200 misc + 500 safety + 80 gas = 20780.
+  // Warranty (300) is deliberately NOT capitalized: it is the cost of the
+  // warranty contract sold to the customer, so it is matched against warranty
+  // revenue instead of inflating vehicle COGS.
+  check("capitalized cost is 20,780.00", t.capitalizedCost === 20780, `got ${t.capitalizedCost}`)
+  // Period: 150 interest + 50 fees + 300 warranty = 500
+  check("period cost is 500.00", t.periodCost === 500, `got ${t.periodCost}`)
+  // Taxable base still includes warranty (HST applies) but excludes interest
+  // and fees, which are exempt financial services.
   check("taxable base is 21,080.00", t.taxableBase === 21080, `got ${t.taxableBase}`)
   check("HST is 2,740.40", t.taxAmount === 2740.4, `got ${t.taxAmount}`)
   check(
@@ -92,8 +96,8 @@ console.log("\n=== Scenario 1: the original failing purchase (Stock #12 shape) =
     `got ${debitTo(lines, ACCOUNTS.HST_RECEIVABLE)}`,
   )
   check("grand total is 24,020.40", t.grandTotal === 24020.4, `got ${t.grandTotal}`)
-  // Capitalized cost is split across the three inventory accounts the live
-  // chart provides: base 20,000 + 200 misc + 80 gas, safety 500, warranty 300.
+  // Capitalized cost is split across the inventory accounts the live chart
+  // provides: base 20,000 + 200 misc + 80 gas, safety 500.
   check(
     "base inventory (1200) debited 20,280.00",
     debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY) === 20280,
@@ -105,13 +109,15 @@ console.log("\n=== Scenario 1: the original failing purchase (Stock #12 shape) =
     `got ${debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY_SAFETY)}`,
   )
   check(
-    "reconditioning subaccount (1220) carries warranty cost",
-    debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY_RECONDITIONING) === 300,
-    `got ${debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY_RECONDITIONING)}`,
+    "warranty expensed to 5200, not capitalized into inventory",
+    debitTo(lines, ACCOUNTS.WARRANTY_COSTS) === 300 &&
+      debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY_RECONDITIONING) === 0,
+    `5200 got ${debitTo(lines, ACCOUNTS.WARRANTY_COSTS)}, 1220 got ${debitTo(lines, ACCOUNTS.VEHICLE_INVENTORY_RECONDITIONING)}`,
   )
   check(
-    "inventory accounts together hold 21,080.00",
-    sumMoney(VEHICLE_INVENTORY_ACCOUNTS.map((c) => debitTo(lines, c))) === 21080,
+    "inventory accounts together hold 20,780.00",
+    sumMoney(VEHICLE_INVENTORY_ACCOUNTS.map((c) => debitTo(lines, c))) === 20780,
+    `got ${sumMoney(VEHICLE_INVENTORY_ACCOUNTS.map((c) => debitTo(lines, c)))}`,
   )
   check(
     "floorplan interest hits 5400 (Floorplan Interest), not 6400 Insurance",
@@ -381,12 +387,33 @@ console.log("\n=== Scenario 7: full deal lifecycle, gross profit and COGS relief
     debitTo(saleLines, ACCOUNTS.FLOORPLAN_INTEREST) === 0,
   )
 
+  // Revenue 26,010 less the 20,780 now capitalized (warranty cost moved out of
+  // inventory), so gross profit rises to 5,230.
   const grossProfit = roundMoney(taxableSubtotal - capitalizedCost)
-  check("gross profit is 4,930.00", grossProfit === 4930, `got ${grossProfit}`)
+  check("gross profit is 5,230.00", grossProfit === 5230, `got ${grossProfit}`)
 
-  // Net profit after the period costs expensed at acquisition.
+  // Net profit after every period cost: 150 interest + 50 fees + 300 warranty.
   const netProfit = roundMoney(grossProfit - pt.periodCost)
-  check("net after floorplan costs is 4,730.00", netProfit === 4730, `got ${netProfit}`)
+  check("net after period costs is 4,730.00", netProfit === 4730, `got ${netProfit}`)
+
+  // Reclassifying warranty must not change the bottom line -- it only moves
+  // cost between COGS and warranty expense. This is the invariant that proves
+  // the change was a reclassification and not a profit restatement.
+  // Old basis: warranty capitalized (21,080 cost) and only 200 of period cost.
+  // New basis: 20,780 cost and 500 of period cost. Both net to the same figure.
+  const oldBasisNet = roundMoney(taxableSubtotal - 21080 - 200)
+  check(
+    "reclassification is bottom-line neutral",
+    netProfit === oldBasisNet,
+    `net ${netProfit} vs old-basis ${oldBasisNet}`,
+  )
+
+  // The warranty line should stand on its own: 400 charged, 300 cost.
+  check(
+    "warranty margin is visible and correct",
+    roundMoney(warrantyCharge - 300) === 100,
+    `got ${roundMoney(warrantyCharge - 300)}`,
+  )
 }
 
 console.log("\n=== Scenario 8: tax neutrality across the deal ===")

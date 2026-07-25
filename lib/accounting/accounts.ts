@@ -94,7 +94,11 @@ export const VEHICLE_INVENTORY_ACCOUNTS = [
  */
 export const PURCHASE_PAYMENT_METHODS = {
   CASH: "CASH",
-  BANK: "BANK",
+  /**
+   * Spelled BANK_DRAFT to match the value already present in the live
+   * `vehicles.payment_method` data and the CHECK constraint in migration 010.
+   */
+  BANK_DRAFT: "BANK_DRAFT",
   FLOORPLAN: "FLOORPLAN",
   ACCOUNTS_PAYABLE: "ACCOUNTS_PAYABLE",
 } as const
@@ -115,7 +119,7 @@ export function creditAccountForPaymentMethod(
       return ACCOUNTS.FLOORPLAN_PAYABLE
     case PURCHASE_PAYMENT_METHODS.ACCOUNTS_PAYABLE:
       return ACCOUNTS.ACCOUNTS_PAYABLE
-    case PURCHASE_PAYMENT_METHODS.BANK:
+    case PURCHASE_PAYMENT_METHODS.BANK_DRAFT:
       return ACCOUNTS.BANK_OPERATING
     default:
       return ACCOUNTS.CASH
@@ -124,7 +128,7 @@ export function creditAccountForPaymentMethod(
 
 export const PAYMENT_METHOD_LABELS: Record<PurchasePaymentMethod, string> = {
   CASH: "Cash",
-  BANK: "Bank account",
+  BANK_DRAFT: "Bank draft / cheque / EFT",
   FLOORPLAN: "Floorplan financing",
   ACCOUNTS_PAYABLE: "On account (payable)",
 }

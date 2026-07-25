@@ -99,6 +99,30 @@ async function main() {
     )
     printLines(`Corrected purchase, dated ${purchaseDate}`, purchaseLines)
 
+    // ---- deposit receipt ---------------------------------------------
+    // The deposit was never journalled at all, so Customer Deposits has no
+    // credit for the sale entry to draw down. Record the receipt first.
+    //
+    // NOTE: there is no deposit_date column, so this is dated the sale date.
+    // If the deposit was taken in an earlier period, adjust the date.
+    const depositAmount = roundMoney(toAmount(vehicle.deposit_amount))
+    let depositLines: PostingLine[] = []
+    if (depositAmount > 0) {
+      depositLines = [
+        {
+          code: ACCOUNTS.BANK_OPERATING,
+          debit: depositAmount,
+          memo: "Customer deposit received",
+        },
+        {
+          code: ACCOUNTS.CUSTOMER_DEPOSITS,
+          credit: depositAmount,
+          memo: "Deposit held - unearned until delivery",
+        },
+      ]
+      printLines(`Deposit receipt, dated ${saleDate}`, depositLines)
+    }
+
     // ---- corrected sale entry ----------------------------------------
     const sellingPrice = roundMoney(toAmount(vehicle.selling_price))
     const safetyCharge = roundMoney(toAmount(vehicle.safety_charge))
@@ -106,7 +130,7 @@ async function main() {
     const omvicFee = roundMoney(toAmount(vehicle.omvic_fee))
     const registrationFee = roundMoney(toAmount(vehicle.registration_fee))
     const referral = roundMoney(toAmount(vehicle.referral_amount))
-    const deposit = roundMoney(toAmount(vehicle.deposit_amount))
+    const deposit = depositAmount
 
     // Registration is collected on the customer's behalf: a pass-through
     // liability, not revenue, and not taxable to us.
@@ -196,7 +220,7 @@ async function main() {
         memo: "Referral fee expense",
       })
       saleLines.push({
-        code: ACCOUNTS.CASH,
+        code: ACCOUNTS.BANK_OPERATING,
         credit: referral,
         memo: "Referral fee paid",
       })
@@ -241,6 +265,17 @@ async function main() {
       lines: purchaseLines,
     })
     console.log(`  posted ${purchase.entryNumber} (purchase)`)
+
+    // Must precede the sale so Customer Deposits carries a credit before the
+    // sale draws it down.
+    if (depositLines.length > 0) {
+      const dep = await postJournalEntry(supabase, {
+        entryDate: saleDate,
+        description: `Customer Deposit: ${label}`,
+        lines: depositLines,
+      })
+      console.log(`  posted ${dep.entryNumber} (deposit receipt)`)
+    }
 
     const sale = await postJournalEntry(supabase, {
       entryDate: saleDate,
