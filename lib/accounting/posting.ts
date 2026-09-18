@@ -314,6 +314,15 @@ export async function reverseJournalEntry(
     createdBy: options.createdBy,
   })
 
+  // Link the mirror back to what it reverses. This is what lets reporting net
+  // a reversed pair out cleanly: the original is REVERSED (already excluded
+  // from POSTED reports) and the mirror is identifiable by reversal_of_entry_id
+  // rather than only by a description string.
+  await supabase
+    .from("journal_entries")
+    .update({ reversal_of_entry_id: journalEntryId })
+    .eq("id", reversal.id)
+
   await supabase
     .from("journal_entries")
     .update({
