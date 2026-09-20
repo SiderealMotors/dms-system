@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
+import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -24,7 +25,7 @@ export default function SignUpPage() {
     setError(null)
 
     try {
-      const res = await fetch("/api/auth/local-signup", {
+      const res = await fetch("/api/auth/sign-up", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, name, role }),
@@ -38,12 +39,21 @@ export default function SignUpPage() {
         return
       }
 
-      // Store user info in localStorage for development
-      if (typeof window !== "undefined") {
-        localStorage.setItem("user", JSON.stringify(data.user))
+      // Account is auto-confirmed, so sign in immediately.
+      const supabase = createClient()
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      })
+
+      if (signInError) {
+        // Account exists but auto sign-in failed; send them to log in.
+        router.push("/auth/login")
+        return
       }
 
-      router.push("/auth/sign-up-success")
+      router.push("/dashboard")
+      router.refresh()
     } catch (err) {
       setError("An unexpected error occurred")
       setLoading(false)

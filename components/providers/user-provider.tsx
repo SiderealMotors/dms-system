@@ -1,6 +1,7 @@
 "use client"
 
 import { createContext, useContext, useEffect, useState } from "react"
+import { createClient } from "@/lib/supabase/client"
 import type { User } from "@/lib/types"
 
 type UserContextType = {
@@ -20,46 +21,60 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Get user from localStorage (local auth mode)
-    const getUser = async () => {
-      if (typeof window !== "undefined") {
-        const userStr = localStorage.getItem("user")
-        if (userStr) {
-          try {
-            const userData = JSON.parse(userStr)
-            setUser(userData)
-          } catch (err) {
-            console.error("Failed to parse user from localStorage:", err)
-            setUser(null)
-          }
-        }
+    const supabase = createClient()
+    let active = true
+
+    // Load the public.users profile for the current session, if any.
+    const loadProfile = async () => {
+      const {
+        data: { user: authUser },
+      } = await supabase.auth.getUser()
+
+      if (!active) return
+
+      if (!authUser) {
+        setUser(null)
+        setLoading(false)
+        return
       }
-      setLoading(false)
-    }
 
-    getUser()
-
-    // Listen for storage changes (when user signs in/out in another tab)
-    const handleStorageChange = () => {
-      const userStr = localStorage.getItem("user")
-      if (userStr) {
-        try {
-          const userData = JSON.parse(userStr)
-          setUser(userData)
-        } catch (err) {
+      try {
+        const res = await fetch("/api/users/me")
+        if (active && res.ok) {
+          const profile = await res.json()
+          setUser(profile)
+        } else if (active) {
           setUser(null)
         }
-      } else {
-        setUser(null)
+      } catch {
+        if (active) setUser(null)
+      } finally {
+        if (active) setLoading(false)
       }
     }
 
-    window.addEventListener("storage", handleStorageChange)
-    return () => window.removeEventListener("storage", handleStorageChange)
+    loadProfile()
+
+    // React to sign-in / sign-out across tabs and after redirects.
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session?.user) {
+        setUser(null)
+        return
+      }
+      loadProfile()
+    })
+
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   const signOut = async () => {
-    localStorage.removeItem("user")
+    const supabase = createClient()
+    await supabase.auth.signOut()
     setUser(null)
     window.location.href = "/auth/login"
   }

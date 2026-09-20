@@ -347,7 +347,7 @@ export async function resolveActingUserId(
   const { data } = await supabase
     .from("users")
     .select("id")
-    .eq("auth_id", user.id)
+    .eq("id", user.id)
     .single()
 
   return (data?.id as string) ?? null
