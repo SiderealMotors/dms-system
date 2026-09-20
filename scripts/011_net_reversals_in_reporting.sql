@@ -31,8 +31,16 @@ WHERE orig.reversed_by_entry_id = mirror.id
 -- Per-entry balance view. Unchanged in shape, but now exposes the reversal
 -- linkage so a reader can tell reversed originals and mirrors apart. It still
 -- lists EVERY entry (imbalance detection must see reversals too).
+--
+-- These views are dropped and recreated (not CREATE OR REPLACE) because we are
+-- adding/reordering columns, which REPLACE cannot do. v_reporting_line_items
+-- is dropped first in case anything depends on the others.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW v_journal_entry_balance AS
+DROP VIEW IF EXISTS v_reporting_line_items;
+DROP VIEW IF EXISTS v_trial_balance;
+DROP VIEW IF EXISTS v_journal_entry_balance;
+
+CREATE VIEW v_journal_entry_balance AS
 SELECT
   je.id,
   je.entry_number,
