@@ -110,9 +110,12 @@ async function main() {
     if (depositAmount > 0) {
       depositLines = [
         {
-          code: ACCOUNTS.BANK_OPERATING,
+          // Bank statements are the sole source for 1010; the matching real
+          // incoming deposit lands in Suspense during reconstruction, so the
+          // vehicle-module receipt goes there too and the two net out.
+          code: ACCOUNTS.SUSPENSE_BANK_RECON,
           debit: depositAmount,
-          memo: "Customer deposit received",
+          memo: "Customer deposit received (via bank, in suspense)",
         },
         {
           code: ACCOUNTS.CUSTOMER_DEPOSITS,
@@ -220,9 +223,11 @@ async function main() {
         memo: "Referral fee expense",
       })
       saleLines.push({
-        code: ACCOUNTS.BANK_OPERATING,
+        // Sole-source rule: the real referral e-transfer out lands in Suspense
+        // during reconstruction, so the module's credit goes there to net.
+        code: ACCOUNTS.SUSPENSE_BANK_RECON,
         credit: referral,
-        memo: "Referral fee paid",
+        memo: "Referral fee paid (via bank, in suspense)",
       })
     }
 
@@ -241,9 +246,13 @@ async function main() {
       .select("id, entry_number, status, description")
       .eq("status", "POSTED")
 
+    // Match the parenthesized "(12)" label form, never the bare stock number:
+    // bank-reconstruction descriptions contain digit runs like "812" that would
+    // otherwise substring-match "12" and get wrongly reversed.
+    const stockTag = `(${vehicle.stock_number})`
     for (const entry of existing ?? []) {
       const desc = String((entry as { description?: string }).description ?? "")
-      if (!desc.includes(String(vehicle.stock_number))) continue
+      if (!desc.includes(stockTag)) continue
       const reversal = await reverseJournalEntry(
         supabase,
         (entry as { id: string }).id,

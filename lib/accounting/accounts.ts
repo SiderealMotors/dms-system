@@ -23,8 +23,20 @@ export const ACCOUNTS = {
   VEHICLE_INVENTORY_SAFETY: "1210",
   /** Purpose-built subaccount for capitalized reconditioning. */
   VEHICLE_INVENTORY_RECONDITIONING: "1220",
+  /**
+   * Auction / vehicle-vendor cash out (ADESA, "600-370 King St W") not yet
+   * allocated to a specific tracked unit. Clearing asset, worked down as
+   * purchases are matched to inventory. Added in migration 012.
+   */
+  VEHICLE_PURCHASES_UNALLOCATED: "1250",
   PARTS_INVENTORY: "1300",
   PREPAID_EXPENSES: "1400",
+  /**
+   * Holding account for bank flows whose economic nature is undetermined
+   * during the statement reconstruction. Reclassified to zero over time.
+   * Added in migration 012.
+   */
+  SUSPENSE_BANK_RECON: "1900",
 
   // ---- Liabilities (2000s) ----
   ACCOUNTS_PAYABLE: "2000",
@@ -64,6 +76,8 @@ export const ACCOUNTS = {
   RENT: "6100",
   UTILITIES: "6200",
   ADVERTISING: "6300",
+  /** Bank service charges, monthly fees, overdraft interest. Migration 012. */
+  BANK_CHARGES: "6350",
   INSURANCE: "6400",
   FLOORPLAN_FEES: "6450",
   DEPRECIATION: "6500",
@@ -120,7 +134,12 @@ export function creditAccountForPaymentMethod(
     case PURCHASE_PAYMENT_METHODS.ACCOUNTS_PAYABLE:
       return ACCOUNTS.ACCOUNTS_PAYABLE
     case PURCHASE_PAYMENT_METHODS.BANK_DRAFT:
-      return ACCOUNTS.BANK_OPERATING
+      // Bank statements are the sole source of truth for 1010, and the vehicle
+      // module's HST-grossed "bank draft" is not a real bank line. Fund the
+      // purchase from the vehicle-purchases clearing account instead; the real
+      // auction/vendor cash-out (ADESA, 600-370 King) also lands there, so the
+      // two meet in 1250 and reconcile there rather than corrupting 1010.
+      return ACCOUNTS.VEHICLE_PURCHASES_UNALLOCATED
     default:
       return ACCOUNTS.CASH
   }
@@ -167,10 +186,10 @@ const PERIOD_EXPENSE_ACCOUNTS: Record<string, AccountCode> = {
   RENT: ACCOUNTS.RENT,
   UTILITIES: ACCOUNTS.UTILITIES,
   WARRANTY: ACCOUNTS.WARRANTY_COSTS,
-  // No dedicated fuel or bank-charge account exists in the live chart.
+  // No dedicated fuel account exists in the live chart.
   FUEL: ACCOUNTS.OTHER_OPERATING,
   GAS: ACCOUNTS.OTHER_OPERATING,
-  BANK_FEE: ACCOUNTS.OTHER_OPERATING,
+  BANK_FEE: ACCOUNTS.BANK_CHARGES,
   REGISTRATION: ACCOUNTS.MISC_EXPENSE,
 }
 
