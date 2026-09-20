@@ -14,50 +14,28 @@ interface AccountBalance {
 export async function GET() {
   const supabase = await createClient()
 
-  // Get all account balances from posted journal entries
-  const { data: lineItems } = await supabase
-    .from("journal_line_items")
-    .select(`
-      debit,
-      credit,
-      account:gl_accounts(id, code, name, account_type, normal_balance),
-      journal_entry:journal_entries!inner(status)
-    `)
-    .eq("journal_entry.status", "POSTED")
+  // Read balances from v_trial_balance, which aggregates POSTED entries and
+  // excludes reversal mirrors, so a reversed entry and its mirror net to zero.
+  // Aggregating journal_line_items directly here would double-subtract the
+  // mirror (whose reversed original is already non-POSTED) and show accounts
+  // running falsely negative.
+  const { data: trialBalance } = await supabase
+    .from("v_trial_balance")
+    .select("code, name, account_type, normal_balance, total_debit, total_credit, balance")
 
-  // Calculate account balances
   const accountBalances: Record<string, AccountBalance> = {}
 
-  if (lineItems) {
-    for (const item of lineItems) {
-      // Supabase returns joined single records as objects, not arrays
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const account = item.account as any
-      if (!account) continue
-      
-      const accountId = account.id as string
-      if (!accountBalances[accountId]) {
-        accountBalances[accountId] = {
-          code: account.code as string,
-          name: account.name as string,
-          type: account.account_type as string,
-          normalBalance: account.normal_balance as string,
-          debits: 0,
-          credits: 0,
-          balance: 0,
-        }
+  if (trialBalance) {
+    for (const row of trialBalance) {
+      accountBalances[row.code as string] = {
+        code: row.code as string,
+        name: row.name as string,
+        type: row.account_type as string,
+        normalBalance: row.normal_balance as string,
+        debits: Number(row.total_debit) || 0,
+        credits: Number(row.total_credit) || 0,
+        balance: Number(row.balance) || 0,
       }
-      accountBalances[accountId].debits += Number(item.debit) || 0
-      accountBalances[accountId].credits += Number(item.credit) || 0
-    }
-  }
-
-  // Calculate final balances based on normal balance
-  for (const account of Object.values(accountBalances)) {
-    if (account.normalBalance === "DEBIT") {
-      account.balance = account.debits - account.credits
-    } else {
-      account.balance = account.credits - account.debits
     }
   }
 
@@ -124,7 +102,9 @@ export async function GET() {
     if (a.type === "EQUITY") totalEquity += a.balance
     if (a.type === "REVENUE") totalRevenue += a.balance
     if (a.type === "EXPENSE") totalExpenses += a.balance
-    if (a.code === "1000") cashBalance = a.balance
+    // "Available cash" means liquid funds: petty cash (1000) plus the operating
+    // bank account (1010), which is where bank-draft/EFT activity now lands.
+    if (a.code === "1000" || a.code === "1010") cashBalance += a.balance
   }
 
   const netIncome = totalRevenue - totalExpenses

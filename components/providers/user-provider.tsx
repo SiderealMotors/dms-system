@@ -22,42 +22,54 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const supabase = createClient()
+    let active = true
 
-    // Get initial user
-    const getUser = async () => {
-      const { data: { user: authUser } } = await supabase.auth.getUser()
-      
-      if (authUser) {
-        const { data: dbUser } = await supabase
-          .from("users")
-          .select("*")
-          .eq("id", authUser.id)
-          .single()
-        
-        setUser(dbUser)
+    // Load the public.users profile for the current session, if any.
+    const loadProfile = async () => {
+      const {
+        data: { user: authUser },
+      } = await supabase.auth.getUser()
+
+      if (!active) return
+
+      if (!authUser) {
+        setUser(null)
+        setLoading(false)
+        return
       }
-      setLoading(false)
+
+      try {
+        const res = await fetch("/api/users/me")
+        if (active && res.ok) {
+          const profile = await res.json()
+          setUser(profile)
+        } else if (active) {
+          setUser(null)
+        }
+      } catch {
+        if (active) setUser(null)
+      } finally {
+        if (active) setLoading(false)
+      }
     }
 
-    getUser()
+    loadProfile()
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
-        const { data: dbUser } = await supabase
-          .from("users")
-          .select("*")
-          .eq("id", session.user.id)
-          .single()
-        
-        setUser(dbUser)
-      } else {
+    // React to sign-in / sign-out across tabs and after redirects.
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session?.user) {
         setUser(null)
+        return
       }
-      setLoading(false)
+      loadProfile()
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   const signOut = async () => {

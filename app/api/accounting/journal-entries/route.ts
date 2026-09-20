@@ -1,5 +1,13 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextRequest, NextResponse } from "next/server"
+import type { AccountCode } from "@/lib/accounting/accounts"
+import { toAmount } from "@/lib/accounting/money"
+import {
+  PostingError,
+  postJournalEntry,
+  resolveActingUserId,
+  type PostingLine,
+} from "@/lib/accounting/posting"
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient()
@@ -32,61 +40,82 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ data, count })
 }
 
+/**
+ * Create a manual journal entry.
+ *
+ * Routed through the shared posting engine so a hand-keyed entry is held to the
+ * same standard as a system-generated one: debits must equal credits, every
+ * account must resolve, and the entry number comes from a single allocator.
+ *
+ * Line items may identify their account by `code` or by `account_id`.
+ */
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
   const body = await request.json()
   const { line_items, ...entryData } = body
 
-  // Get current user
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  // Generate entry number if not provided
-  if (!entryData.entry_number) {
-    const { count } = await supabase
-      .from("journal_entries")
-      .select("*", { count: "exact", head: true })
-    entryData.entry_number = `JE${String((count || 0) + 1).padStart(5, "0")}`
+  // Attribute to the public.users row, not the auth uuid.
+  const actingUserId = await resolveActingUserId(supabase)
+
+  if (!Array.isArray(line_items) || line_items.length === 0) {
+    return NextResponse.json(
+      { error: "A journal entry requires at least two line items." },
+      { status: 400 },
+    )
   }
 
-  entryData.created_by = user.id
-  entryData.status = entryData.status || "POSTED"
-  if (entryData.status === "POSTED" && !entryData.posted_at) {
-    entryData.posted_at = new Date().toISOString()
+  // Resolve any account_id references to their codes.
+  const { data: allAccounts, error: accountsError } = await supabase
+    .from("gl_accounts")
+    .select("id, code")
+
+  if (accountsError) {
+    return NextResponse.json({ error: accountsError.message }, { status: 500 })
   }
 
-  // Create the journal entry
-  const { data: entry, error: entryError } = await supabase
-    .from("journal_entries")
-    .insert(entryData)
-    .select()
-    .single()
+  const codeById = new Map((allAccounts ?? []).map((a) => [a.id as string, a.code as string]))
 
-  if (entryError) {
-    return NextResponse.json({ error: entryError.message }, { status: 500 })
-  }
-
-  // Create line items if provided
-  if (line_items && line_items.length > 0) {
-    const lineItemsWithEntryId = line_items.map((item: Record<string, unknown>) => ({
-      ...item,
-      journal_entry_id: entry.id,
-    }))
-
-    const { error: lineItemsError } = await supabase
-      .from("journal_line_items")
-      .insert(lineItemsWithEntryId)
-
-    if (lineItemsError) {
-      // Rollback - delete the entry
-      await supabase.from("journal_entries").delete().eq("id", entry.id)
-      return NextResponse.json({ error: lineItemsError.message }, { status: 500 })
+  const lines: PostingLine[] = []
+  for (const item of line_items as Array<Record<string, unknown>>) {
+    const code = (item.code as string) ?? codeById.get(item.account_id as string)
+    if (!code) {
+      return NextResponse.json(
+        { error: `Line item does not reference a valid GL account.` },
+        { status: 400 },
+      )
     }
+    lines.push({
+      code: code as AccountCode,
+      debit: toAmount(item.debit),
+      credit: toAmount(item.credit),
+      memo: (item.memo as string) ?? "",
+    })
   }
 
-  // Fetch the complete entry with line items
+  let entry
+  try {
+    entry = await postJournalEntry(supabase, {
+      entryDate: entryData.entry_date || new Date().toISOString().split("T")[0],
+      description: entryData.description || "Manual journal entry",
+      lines,
+      createdBy: actingUserId,
+      // Hand-keyed entries must balance exactly; no rounding plug.
+      strict: true,
+    })
+  } catch (err) {
+    if (err instanceof PostingError) {
+      return NextResponse.json({ error: err.message }, { status: 422 })
+    }
+    throw err
+  }
+
   const { data: completeEntry } = await supabase
     .from("journal_entries")
     .select(`

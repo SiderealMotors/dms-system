@@ -1,35 +1,56 @@
 import { createClient } from "@/lib/supabase/server"
 import { NextRequest, NextResponse } from "next/server"
+import { ACCOUNTS } from "@/lib/accounting/accounts"
+import { roundMoney, sumMoney, toAmount } from "@/lib/accounting/money"
+import {
+  PostingError,
+  postJournalEntry,
+  resolveActingUserId,
+  type PostingLine,
+} from "@/lib/accounting/posting"
 
-// Record payment on AP or AR
+/**
+ * Record a payment against a payable or a receivable.
+ *
+ * Settling a bill:     Dr Accounts Payable    / Cr Cash
+ * Receiving a payment: Dr Cash                / Cr Accounts Receivable
+ *
+ * The previous version used account 1100 for "AR", but 1100 is Vehicle
+ * Inventory in the chart of accounts -- so every customer receipt was credited
+ * against inventory, understating inventory and leaving AR uncleared.
+ */
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
   const body = await request.json()
-  
-  const { data: { user } } = await supabase.auth.getUser()
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const { data: dbUser } = await supabase
-    .from("users")
-    .select("id, role")
-    .eq("id", user.id)
-    .single()
-
-  if (!dbUser) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 })
-  }
+  // Resolve the public.users row by auth_id. The old lookup matched on
+  // users.id = auth uuid, which does not hold and produced a bad created_by.
+  const actingUserId = await resolveActingUserId(supabase)
 
   const { type, id, amount, payment_date, payment_method } = body
 
-  if (!type || !id || !amount) {
+  if (!type || !id || amount === undefined || amount === null) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
   }
 
+  if (type !== "payable" && type !== "receivable") {
+    return NextResponse.json({ error: "type must be 'payable' or 'receivable'" }, { status: 400 })
+  }
+
+  const paymentAmount = toAmount(amount)
+  if (paymentAmount <= 0) {
+    return NextResponse.json({ error: "Payment amount must be greater than zero" }, { status: 400 })
+  }
+
   const table = type === "payable" ? "accounts_payable" : "accounts_receivable"
-  
-  // Get current record
+
   const { data: record, error: fetchError } = await supabase
     .from(table)
     .select("*")
@@ -40,91 +61,94 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Record not found" }, { status: 404 })
   }
 
-  const newAmountPaid = (record.amount_paid || 0) + amount
-  const newStatus = newAmountPaid >= record.total_amount ? "PAID" : "PARTIAL"
+  const alreadyPaid = toAmount(record.amount_paid)
+  const totalAmount = toAmount(record.total_amount)
+  const outstanding = roundMoney(totalAmount - alreadyPaid)
 
-  // Generate journal entry
-  const { data: lastEntry } = await supabase
-    .from("journal_entries")
-    .select("entry_number")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single()
-
-  const nextNum = lastEntry 
-    ? parseInt(lastEntry.entry_number.replace("JE-", "")) + 1 
-    : 1
-  const entryNumber = `JE-${String(nextNum).padStart(5, "0")}`
-
-  // Get GL accounts
-  const accountCodes = type === "payable" 
-    ? ["1000", "2000"] // Cash, AP
-    : ["1000", "1100"] // Cash, AR
-
-  const { data: accounts } = await supabase
-    .from("gl_accounts")
-    .select("id, code")
-    .in("code", accountCodes)
-
-  const cashAccount = accounts?.find(a => a.code === "1000")
-  const balanceAccount = accounts?.find(a => a.code === (type === "payable" ? "2000" : "1100"))
-
-  if (!cashAccount || !balanceAccount) {
-    return NextResponse.json({ error: "GL accounts not found" }, { status: 500 })
+  if (outstanding <= 0) {
+    return NextResponse.json(
+      { error: "This document is already fully settled." },
+      { status: 409 },
+    )
   }
 
-  // Create journal entry
-  const description = type === "payable" 
-    ? `Payment: ${record.description}`
-    : `Receipt: ${record.description}`
+  // Never let a payment exceed the balance owing: that silently creates an
+  // unrecorded customer deposit or vendor prepayment.
+  if (paymentAmount > outstanding) {
+    return NextResponse.json(
+      {
+        error:
+          `Payment of ${paymentAmount.toFixed(2)} exceeds the outstanding balance of ` +
+          `${outstanding.toFixed(2)}. Record the balance owing, or post the excess ` +
+          `separately as a deposit or prepayment.`,
+      },
+      { status: 422 },
+    )
+  }
 
-  const { data: journalEntry, error: jeError } = await supabase
-    .from("journal_entries")
-    .insert({
-      entry_number: entryNumber,
-      entry_date: payment_date || new Date().toISOString().split("T")[0],
+  const newAmountPaid = sumMoney([alreadyPaid, paymentAmount])
+  const newStatus = newAmountPaid >= totalAmount ? "PAID" : "PARTIAL"
+
+  const description =
+    type === "payable"
+      ? `Payment: ${record.description ?? ""}`.trim()
+      : `Receipt: ${record.description ?? ""}`.trim()
+
+  const method = payment_method || "cheque"
+
+  const lines: PostingLine[] =
+    type === "payable"
+      ? [
+          { code: ACCOUNTS.ACCOUNTS_PAYABLE, debit: paymentAmount, memo: "Settle vendor payable" },
+          { code: ACCOUNTS.CASH, credit: paymentAmount, memo: `Payment via ${method}` },
+        ]
+      : [
+          { code: ACCOUNTS.CASH, debit: paymentAmount, memo: `Received via ${method}` },
+          {
+            code: ACCOUNTS.ACCOUNTS_RECEIVABLE,
+            credit: paymentAmount,
+            memo: "Clear customer receivable",
+          },
+        ]
+
+  let entry
+  try {
+    entry = await postJournalEntry(supabase, {
+      entryDate: payment_date || new Date().toISOString().split("T")[0],
       description,
-      status: "POSTED",
-      posted_at: new Date().toISOString(),
-      created_by: dbUser.id,
+      lines,
+      createdBy: actingUserId,
     })
-    .select()
-    .single()
-
-  if (jeError) {
-    return NextResponse.json({ error: jeError.message }, { status: 500 })
+  } catch (err) {
+    if (err instanceof PostingError) {
+      return NextResponse.json({ error: err.message }, { status: 422 })
+    }
+    throw err
   }
 
-  // Create line items based on payment type
-  const lineItems = type === "payable"
-    ? [
-        // Paying a bill: Debit AP, Credit Cash
-        { journal_entry_id: journalEntry.id, account_id: balanceAccount.id, debit: amount, credit: 0, memo: "Reduce AP" },
-        { journal_entry_id: journalEntry.id, account_id: cashAccount.id, debit: 0, credit: amount, memo: `Payment via ${payment_method || "check"}` },
-      ]
-    : [
-        // Receiving payment: Debit Cash, Credit AR
-        { journal_entry_id: journalEntry.id, account_id: cashAccount.id, debit: amount, credit: 0, memo: `Received via ${payment_method || "check"}` },
-        { journal_entry_id: journalEntry.id, account_id: balanceAccount.id, debit: 0, credit: amount, memo: "Reduce AR" },
-      ]
-
-  await supabase.from("journal_line_items").insert(lineItems)
-
-  // Update the record
   const { data: updated, error: updateError } = await supabase
     .from(table)
     .update({
       amount_paid: newAmountPaid,
       status: newStatus,
-      payment_journal_entry_id: journalEntry.id,
+      payment_journal_entry_id: entry.id,
     })
     .eq("id", id)
     .select()
     .single()
 
   if (updateError) {
+    const { reverseJournalEntry } = await import("@/lib/accounting/posting")
+    await reverseJournalEntry(supabase, entry.id, {
+      reason: "Payment record could not be updated",
+      createdBy: actingUserId,
+    })
     return NextResponse.json({ error: updateError.message }, { status: 500 })
   }
 
-  return NextResponse.json({ data: updated, journalEntry })
+  return NextResponse.json({
+    data: updated,
+    journalEntry: { id: entry.id, entry_number: entry.entryNumber },
+    outstanding: roundMoney(totalAmount - newAmountPaid),
+  })
 }

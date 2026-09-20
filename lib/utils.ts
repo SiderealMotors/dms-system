@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
+import { DEFAULT_TAX_RATE } from "@/lib/accounting/tax"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -53,7 +54,7 @@ export function calculateVehicleTotalCost(vehicle: {
   warranty_cost?: number
   floorplan_interest_cost?: number
   gas?: number
-}, taxRate: number = 0.13): number {
+}, taxRate: number = DEFAULT_TAX_RATE): number {
   const preTaxCost = calculateVehiclePreTaxCost(vehicle)
   // Add tax on taxable items (purchase, miscellaneous, safety, warranty, gas - not floorplan)
   const taxableItems = Number(vehicle.purchase_price || 0) + Number(vehicle.miscellaneous_cost || 0) + Number(vehicle.safety_cost || 0) + Number(vehicle.warranty_cost || 0) + Number(vehicle.gas || 0)

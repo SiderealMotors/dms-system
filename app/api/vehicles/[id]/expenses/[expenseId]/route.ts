@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
+import { resolveActingUserId, reverseJournalEntry } from "@/lib/accounting/posting"
 
-// DELETE - Delete an expense and its journal entry
+// DELETE - Remove an expense and reverse its journal entry
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; expenseId: string }> }
@@ -12,7 +13,7 @@ export async function DELETE(
   // Get the expense to find its journal entry
   const { data: expense } = await supabase
     .from("vehicle_expenses")
-    .select("journal_entry_id")
+    .select("journal_entry_id, description")
     .eq("id", expenseId)
     .single()
 
@@ -20,10 +21,14 @@ export async function DELETE(
     return NextResponse.json({ error: "Expense not found" }, { status: 404 })
   }
 
-  // Delete the journal entry (this will cascade to line items)
+  // Posted entries are immutable. Reverse with a dated mirror entry rather
+  // than deleting, so the ledger retains a complete history.
   if (expense.journal_entry_id) {
-    await supabase.from("journal_line_items").delete().eq("journal_entry_id", expense.journal_entry_id)
-    await supabase.from("journal_entries").delete().eq("id", expense.journal_entry_id)
+    const actingUserId = await resolveActingUserId(supabase)
+    await reverseJournalEntry(supabase, expense.journal_entry_id as string, {
+      reason: `Expense removed: ${expense.description ?? expenseId}`,
+      createdBy: actingUserId,
+    })
   }
 
   // Delete the expense
